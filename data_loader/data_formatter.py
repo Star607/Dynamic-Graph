@@ -1,5 +1,4 @@
-"""
-Dynamic graph data from online resources are in different formats. Therefore, it
+"""Dynamic graph data from online resources are in different formats. Therefore, it
 is needed to be transformed as a unifed graph format.
 
 unifed graph format: Those non-existent features are set as 0. 
@@ -66,6 +65,8 @@ def ctdne_transf(project_dir, store_dir, project):
     header = ['from_node_id', 'to_node_id', 'timestamp']
     header2 = ['from_node_id', 'to_node_id', 'state_label', 'timestamp']
     for f, name in zip(files, fname):
+        if name.find('.') != -1:
+            name = name[:name.find('.')]
         print('*****{}*****'.format(name))
         df = pd.read_csv(f, header=None)
         if len(df.columns) == 3:
@@ -101,6 +102,8 @@ def neotg_transf(project_dir, store_dir, project):
     header = ['from_node_id', 'to_node_id', 'timestamp']
     header2 = ['from_node_id', 'to_node_id', 'weight', 'timestamp']
     for f, name in zip(files, fname):
+        if name.find('.') != -1:
+            name = name[:name.find('.')]
         print('*****{}*****'.format(name))
         df = pd.read_csv(f, header=None, sep=' ')
         if len(df.columns) == 3:
@@ -131,6 +134,7 @@ def jodie_transf(project_dir, store_dir, project):
     files = [project_dir + f for f in fname]
     header = ['from_node_id', 'to_node_id', 'timestamp', 'state_label']
     for f, name in zip(files, fname):
+        name = name[:name.find('.')] if name.find('.') != -1
         print('*****{}*****'.format(name))
         df = pd.read_csv(f, header=None, skiprows=1)
         headers = header + ['weight{0}'.format(i) for i in range(len(df.columns) - 4)]
