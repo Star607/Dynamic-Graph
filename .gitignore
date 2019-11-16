@@ -3,3 +3,5 @@
 */__pycache_/*
 graph_data/*
 log/*
+cuda_example/*
+tf_op/*

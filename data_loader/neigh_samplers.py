@@ -1,7 +1,7 @@
 from __future__ import division
 from __future__ import print_function
 
-from graphsage.layers import Layer
+from ..layers import Layer
 
 import tensorflow as tf
 flags = tf.app.flags
@@ -29,3 +29,9 @@ class UniformNeighborSampler(Layer):
         adj_lists = tf.transpose(tf.random_shuffle(tf.transpose(adj_lists)))
         adj_lists = tf.slice(adj_lists, [0, 0], [-1, num_samples])
         return adj_lists
+
+
+class TemporalNeighborSampler(Layer):
+    """
+    """
+    pass

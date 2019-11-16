@@ -134,10 +134,12 @@ def jodie_transf(project_dir, store_dir, project):
     files = [project_dir + f for f in fname]
     header = ['from_node_id', 'to_node_id', 'timestamp', 'state_label']
     for f, name in zip(files, fname):
-        name = name[:name.find('.')] if name.find('.') != -1
+        if name.find('.') != -1:
+            name = name[:name.find('.')]
         print('*****{}*****'.format(name))
         df = pd.read_csv(f, header=None, skiprows=1)
-        headers = header + ['weight{0}'.format(i) for i in range(len(df.columns) - 4)]
+        headers = header + ['weight{0}'.format(i)
+                            for i in range(len(df.columns) - 4)]
         df.columns = headers
 
         user_id = df['from_node_id'].tolist()
@@ -151,11 +153,11 @@ def jodie_transf(project_dir, store_dir, project):
         nodes = pd.DataFrame(columns=nodes_cols)
         nodes['node_id'] = nodes_id
         nodes['id_map'] = list(range(1, len(nodes_id) + 1))
-        nodes['role'] = ['user'] * len(set(user_id)) + ['item'] * len(set(item_id))
+        nodes['role'] = ['user'] * \
+            len(set(user_id)) + ['item'] * len(set(item_id))
         nodes['label'] = 0
         nodes.to_csv('{}/{}-{}.nodes'.format(store_dir,
                                              project, name), index=None)
-
 
 
 def ngcf_transf(project_dir, store_dir, project):
@@ -177,6 +179,6 @@ edges_cols = ['from_node_id', 'to_node_id', 'timestamp', 'state_label']
 nodes_cols = ['node_id', 'id_map', 'role', 'label']
 
 if __name__ == '__main__':
-    # to_csv('CTDNE')
-    # to_csv('NEOTG')
-    to_csv('JODIE')
+    to_csv('CTDNE')
+    to_csv('NEOTG')
+    # to_csv('JODIE')
