@@ -1,7 +1,9 @@
 .idea/*
 .vscode/*
-*/__pycache_/*
+*/__pycache__/*
+*.pyc
 graph_data/*
 log/*
 cuda_example/*
 tf_op/*
+ckpt/*
