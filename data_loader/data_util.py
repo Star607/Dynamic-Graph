@@ -1,15 +1,14 @@
 import os
-import pprint
 from collections import defaultdict, namedtuple
 from datetime import datetime
 
 import keras
 import keras.backend as K
 import networkx as nx
-from numba import jit
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from numba import jit
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
@@ -85,7 +84,7 @@ class EdgeBatchIterator(object):
 
         new_edges = []
         print("********Discard edge attributes if exists.********")
-        for index, row in edges.iterrows():
+        for _, row in edges.iterrows():
             new_edges.append(
                 self.Edge(row["from_node_id"], row["to_node_id"], row["timestamp"]))
 
@@ -268,7 +267,7 @@ if __name__ == "__main__":
         0., shape=(), name="dropout")
 
     config = tf.ConfigProto(log_device_placement=False)
-    config.gpu_options.allow_growth = True
+    config.gpu_options.allow_growth = True  # pylint: disable=no-member
     config.allow_soft_placement = True
     sess = tf.Session(config=config)
     megred = tf.summary.merge_all()
