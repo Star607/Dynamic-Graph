@@ -36,7 +36,7 @@ def load_data(datadir="/nfs/zty/Graph/Dynamic-Graph/graph_data", dataset="CTDNE-
 # of the recursive GraphSAGE layers
 SAGEInfo = namedtuple("SAGEInfo",
                       ["layer_name",  # name of the layer (to get feature embedding etc.)
-                       "num_samples",
+                       "num_samples",  # sampling neighbors
                        "output_dim"])
 
 
@@ -229,6 +229,16 @@ class TemporalNodeBatchIterator(object):
     pass
 
 
+def compute_support_sizes(batch_size, layer_infos):
+    support_size = batch_size
+    support_sizes = [support_size]
+    for k in range(len(layer_infos)):
+        t = len(layer_infos) - k - 1
+        support_size *= layer_infos[t].num_samples
+        support_sizes.append(support_size)
+    return support_sizes
+
+
 if __name__ == "__main__":
     config = tf.ConfigProto(log_device_placement=False)
     config.gpu_options.allow_growth = True  # pylint: disable=no-member
@@ -257,7 +267,7 @@ if __name__ == "__main__":
     summary_writer = tf.summary.FileWriter("../log", sess.graph)
 
     # edges, nodes = load_data(dataset="CTDNE-fb-forum")
-    edges, nodes = load_data(dataset="JODIE-wikipedia")
+    edges, nodes = load_data(dataset="JODIE-reddit")
     batch = TruncatedEdgeBatchIterator(edges, nodes, placeholders)
     batch.shuffle()
     print("Preprocessing time:", datetime.now() - start_time)
@@ -272,20 +282,24 @@ if __name__ == "__main__":
         SAGEInfo("sample_2", 5, 128)
     ]
 
+    support_sizes = compute_support_sizes(FLAGS.batch_size, layer_infos)
+    print("support_sizes", support_sizes)
     sample_1, sample_ts_1 = sampler(
-        (placeholders["batch_from"], placeholders["timestamp"], layer_infos[0].num_samples))
+        (placeholders["batch_from"], placeholders["timestamp"], support_sizes[0], layer_infos[1].num_samples))
     sample_2, sample_ts_2 = sampler(
-        (sample_1, sample_ts_1, layer_infos[1].num_samples))
+        (sample_1, sample_ts_1, support_sizes[1], layer_infos[0].num_samples))
 
     print("Computation graph time:", datetime.now() - start_time)
-    it = 1
+    it = 0
     start_time = datetime.now()
-    while not batch.end() and it <= 10:
+    sess.run(tf.global_variables_initializer())
+    while not batch.end():  # and it <= 10:
+        it += 1
         last_time = datetime.now()
         feed_dict = batch.next_train_batch()
-        # if it == 45:
-        #     print("last batch size")
-        #     sample_1, sample_ts_1 = sampler((feed_dict["batch_from"], feed_dict["timestamp"], FLAGS.batch_size, layer_infos[0].num_samples))
+        # if (batch.batch_num + 1) * batch.batch_size < len(batch.train_idx):
+        #     continue
+        # print("tf running")
 
         # values = sess.run(list(placeholders.values()), feed_dict=feed_dict)
         # values = sess.run([sample_1, sample_ts_1], feed_dict=feed_dict)
@@ -293,5 +307,5 @@ if __name__ == "__main__":
         # if it % 10 == 0:
         print("********Batch: %d time: %d secs********" %
               (batch.batch_num, (datetime.now() - last_time).seconds))
-        it += 1
+        # it += 1
     print(datetime.now() - start_time)
