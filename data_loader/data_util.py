@@ -7,7 +7,7 @@ import keras.backend as K
 import networkx as nx
 import numpy as np
 import pandas as pd
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 from numba import jit
 
 flags = tf.app.flags
@@ -39,7 +39,7 @@ SAGEInfo = namedtuple("SAGEInfo",
                        "output_dim"])
 
 
-class EdgeBatchIterator(object):
+class BulkTemporalEdgeBatchIterator(object):
     """Given layer_infos, generate a batch of support_fields: 
         Firstly, generate a batch of temporal edges (batch_size, from_node_id, to_node_id, timestamp)
 
@@ -275,7 +275,7 @@ if __name__ == "__main__":
     sess.run(tf.global_variables_initializer())
 
     edges, nodes = load_data(dataset="CTDNE-fb-forum")
-    batch = EdgeBatchIterator(
+    batch = BulkTemporalEdgeBatchIterator(
         edges, placeholders, layer_infos, context_layer_infos, batch_size=FLAGS.batch_size)
     batch.shuffle()
 

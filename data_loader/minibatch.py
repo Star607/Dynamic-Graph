@@ -10,7 +10,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K  # pylint: disable=import-error
 from data_loader.neigh_samplers import UniformNeighborSampler, MaskNeighborSampler, TemporalNeighborSampler
@@ -18,11 +18,6 @@ from data_loader.neigh_samplers import UniformNeighborSampler, MaskNeighborSampl
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
-
-flags.DEFINE_integer("max_degree", 100, "maximum node degree")
-flags.DEFINE_integer("neg_sample_size", 20, "number of negative samples")
-flags.DEFINE_integer("batch_size", 512, "minibatch size")
-flags.DEFINE_integer("context_size", 25, "temporal context size")
 
 
 def load_data(datadir="/nfs/zty/Graph/Dynamic-Graph/graph_data", dataset="CTDNE-fb-forum"):
@@ -40,7 +35,7 @@ SAGEInfo = namedtuple("SAGEInfo",
                        "output_dim"])
 
 
-class TruncatedEdgeBatchIterator(object):
+class TruncatedTemporalEdgeBatchIterator(object):
     """We use a dummy node with index 0, and use id2idx to transform all nodes into continuous integers.
 
     Edges are sorted in temporal ascending order.
@@ -76,8 +71,11 @@ class TruncatedEdgeBatchIterator(object):
         self.edges = edges_full[self.id_name]
         # print("edges dataframe info:")
         # print(edges.info())
-        self.edges_feature = edges_full[[
-            f for f in edges_full.columns if f not in self.id_name]]
+        if len(self.id_name) == len(edges.columns):
+            self.edge_features = None
+        else:
+            self.edge_features = edges_full[[
+                f for f in edges_full.columns if f not in self.id_name]].to_numpy()
         assert(not np.any(self.edges.isnull()))
 
         self.placeholders = placeholders
@@ -221,7 +219,7 @@ class TruncatedEdgeBatchIterator(object):
         self.batch_num = 0
 
 
-class SparseEdgeBatchIterator(object):
+class SparseTemporalEdgeBatchIterator(object):
     pass
 
 
@@ -268,15 +266,15 @@ if __name__ == "__main__":
 
     # edges, nodes = load_data(dataset="CTDNE-fb-forum")
     edges, nodes = load_data(dataset="JODIE-reddit")
-    batch = TruncatedEdgeBatchIterator(edges, nodes, placeholders)
+    batch = TruncatedTemporalEdgeBatchIterator(edges, nodes, placeholders)
     batch.shuffle()
     print("Preprocessing time:", datetime.now() - start_time)
 
     # construct graphsage computation graph
-    # sampler = MaskNeighborSampler(
-    #     adj_info=batch.adj_ids, ts_info=batch.adj_tss)
-    sampler = TemporalNeighborSampler(
+    sampler = MaskNeighborSampler(
         adj_info=batch.adj_ids, ts_info=batch.adj_tss)
+    # sampler = TemporalNeighborSampler(
+    #     adj_info=batch.adj_ids, ts_info=batch.adj_tss)
     layer_infos = [
         SAGEInfo("sample_1", 10, 128),
         SAGEInfo("sample_2", 5, 128)

@@ -4,7 +4,7 @@ from __future__ import print_function
 from model.layers import Layer
 
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 # flags = tf.app.flags
 # FLAGS = flags.FLAGSs
 
@@ -45,7 +45,8 @@ class MaskNeighborSampler(Layer):
 
     def _call(self, inputs):
         # Attention! the last batch is always smaller than a normal batch
-        ids, tss, support_size, num_samples = inputs
+        ids, tss, batch_size, num_samples = inputs
+        print("batch_size:", batch_size)
         num_ids = tf.shape(ids)[0]
         adj_lists = tf.nn.embedding_lookup(self.adj_info, ids)
         ts_lists = tf.nn.embedding_lookup(self.ts_info, ids)
@@ -54,24 +55,24 @@ class MaskNeighborSampler(Layer):
         mask = tf.less(ts_lists, tf.expand_dims(tss, axis=1))
         indices = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
         # Attention! the last batch is always smaller than a normal batch
-        # Padding indices to a vector of support_size length
+        # Padding indices to a vector of batch_size length
         indices = tf.concat(
-            [indices, tf.zeros([support_size-num_ids], dtype=tf.int32)], axis=0)
+            [indices, tf.zeros([batch_size-num_ids], dtype=tf.int32)], axis=0)
         # avoid tf.random.uniform ```minval < maxval```
         err_indices = tf.maximum(indices, 1)
-        # shape: (support_size * num_samples,)
+        # shape: (batch_size * num_samples,)
         col_idx = tf.reshape([tf.random.uniform(shape=(1, num_samples), minval=0,
                                                 maxval=err_indices[i], dtype=tf.int32)
-                              for i in range(support_size)], shape=[-1])
+                              for i in range(batch_size)], shape=[-1])
         # Attention! tf.map_fn is too slow!
         # def uniform_fn(maxval): return tf.random.uniform(shape=(1, num_samples), minval=0,
         #                                                  maxval=maxval, dtype=tf.int32)
         # col_idx = tf.reshape(
-        #     tf.map_fn(uniform_fn, err_indices), shape=[-1])
-        row_idx = tf.tile(tf.range(support_size), [num_samples])
+        #     tf.vectorized_map(uniform_fn, err_indices), shape=[-1])
+        row_idx = tf.tile(tf.range(batch_size), [num_samples])
         row_idx = tf.reshape(tf.transpose(tf.reshape(
-            row_idx, shape=[-1, support_size])), shape=[-1])
-        # shape: (support_size * num_samples, 2)
+            row_idx, shape=[-1, batch_size])), shape=[-1])
+        # shape: (batch_size * num_samples, 2)
         ids = tf.stack([row_idx, col_idx], axis=1)
         # Attention! the last batch is always smaller than a normal batch
         ids = tf.reshape(ids, [-1, num_samples, 2])[:num_ids]
@@ -98,7 +99,7 @@ class TemporalNeighborSampler(Layer):
         self.ts_info = tf.Variable(ts_info, trainable=False, name="ts_info")
 
     def _call(self, inputs):
-        ids, tss, support_size, num_samples = inputs
+        ids, tss, batch_size, num_samples = inputs
         num_ids = tf.shape(ids)[0]
 
         adj_lists = tf.nn.embedding_lookup(self.adj_info, ids)
@@ -107,17 +108,17 @@ class TemporalNeighborSampler(Layer):
         mask = tf.less(ts_lists, tf.expand_dims(tss, axis=1))
         indices = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
         # Attention! the last batch is always smaller than a normal batch
-        # Padding indices to a vector of support_size length
+        # Padding indices to a vector of batch_size length
         indices = tf.concat(
-            [indices, tf.zeros([support_size-num_ids], dtype=tf.int32)], axis=0)
+            [indices, tf.zeros([batch_size-num_ids], dtype=tf.int32)], axis=0)
         col_idx = tf.concat([tf.range(indices[i]-num_samples, indices[i])
-                             for i in range(support_size)], axis=0)
+                             for i in range(batch_size)], axis=0)
         # Attention! tf.map_fn is too slow
         # def range_fn(idx): return tf.range(idx-num_samples, idx)
         # col_idx = tf.reshape(tf.map_fn(range_fn, indices), shape=[-1])
-        row_idx = tf.tile(tf.range(support_size), [num_samples])
+        row_idx = tf.tile(tf.range(batch_size), [num_samples])
         row_idx = tf.reshape(tf.transpose(tf.reshape(
-            row_idx, shape=[-1, support_size])), shape=[-1])
+            row_idx, shape=[-1, batch_size])), shape=[-1])
         ids = tf.stack([row_idx, col_idx], axis=1)
         # Attention! the last batch is always smaller than a normal batch
         ids = tf.reshape(ids, [-1, num_samples, 2])[:num_ids]
@@ -148,7 +149,8 @@ def check(adj_info, ts_info, input_ids, input_tss, neighbors, tss):
 
 if __name__ == "__main__":
     import os
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    # tf.Variable() doesnt work in eager mode, so comment ```self.adj_info=tf.Variable``` in __init__ function
     tf.enable_eager_execution()
     tf.random.set_random_seed(42)
     np.random.seed(42)
