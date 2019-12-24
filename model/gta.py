@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import pandas as pd
 import tensorflow.compat.v1 as tf
@@ -23,6 +24,16 @@ flags = tf.app.flags
 FLAGS = flags.FLAGS
 
 
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+        print("%r  %2.2f s" % (method.__name__, te - ts))
+        return result
+    return timed
+
+
 class AttentionAggregator(Layer):
     """Referring to Graph Attention Networks(Veličković, Petar, et al.), aggregate neighbors' features via attention mechanism. Given attention weight $a_i$, the node embedding can be computed by $W_0 * h + W_1 * \\sum a_i * h_i$.
         TODO: implement layers with mask
@@ -46,8 +57,8 @@ class AttentionAggregator(Layer):
                 [input_dim, output_dim], name="neigh_weights")
             self.vars["attn_weights"] = glorot(
                 [output_dim, 1], name="attn_weights")
-
-            self.vars["bias"] = zeros([output_dim], name="bias")
+            dim_mult = 2 if concat else 1
+            self.vars["bias"] = zeros([dim_mult * output_dim], name="bias")
 
         if self.logging:
             self._log_vars()
@@ -57,10 +68,8 @@ class AttentionAggregator(Layer):
     def _call(self, inputs):
         self_vecs, neigh_vecs = inputs
 
-        dims = tf.shape(self_vecs)
-        support_size = dims[0]
-        num_neighbors = tf.cast(tf.shape(neigh_vecs)[
-                                0] / support_size, tf.int32)
+        batch_size = tf.shape(self_vecs)[0]
+        num_neighbors = tf.cast(tf.shape(neigh_vecs)[0] / batch_size, tf.int32)
 
         # shape: (support_size * num_neighbors, output_dim)
         from_neighs = tf.matmul(neigh_vecs, self.vars["feat_weights"])
@@ -69,7 +78,7 @@ class AttentionAggregator(Layer):
         # shape: (support_size * num_neighbors, 1)
         neighs_logits = tf.matmul(from_neighs, self.vars["attn_weights"])
         neighs_logits = tf.reshape(
-            neighs_logits, [support_size, num_neighbors])
+            neighs_logits, [batch_size, num_neighbors])
         # shape: (support_size, 1)
         self_logits = tf.matmul(h_self, self.vars["attn_weights"])
         logits = neighs_logits + self_logits
@@ -81,7 +90,7 @@ class AttentionAggregator(Layer):
 
         # shape: (support_size, num_neighbors, output_dim)
         h_neighs = tf.reshape(tf.multiply(coefs, from_neighs), [
-                              support_size, num_neighbors, -1])
+                              batch_size, num_neighbors, -1])
         h_neighs = tf.reduce_sum(h_neighs, axis=1)
 
         if not self.concat:
@@ -93,9 +102,9 @@ class AttentionAggregator(Layer):
 
 
 class GraphTemporalAttention(GeneralizedModel):
-    def __init__(self, placeholders, features, adj, degrees, layer_infos, context_layer_infos,
-                 batch_size=512, learning_rate=1e-4,  concat=True, aggregator_type="attention",
-                 embed_dim=128, **kwargs):
+    def __init__(self, placeholders, features, adj_info, ts_info, degrees, layer_infos,
+                 context_layer_infos, sampler, bipart=False, n_users=0, edge_features=None,
+                 concat=True, aggregator_type="attention", embed_dim=128, **kwargs):
         super(GraphTemporalAttention, self).__init__(**kwargs)
         self.aggregator_cls = AttentionAggregator
 
@@ -105,143 +114,166 @@ class GraphTemporalAttention(GeneralizedModel):
         self.context_from = placeholders["context_from"]
         self.context_to = placeholders["context_to"]
         self.context_timestamp = placeholders["context_timestamp"]
+        self.batch_size = placeholders["batch_size"]
 
-        self.adj_info, self.ts_info = adj
-        self.embeds = tf.get_variable(
-            "node_embeddings", [len(self.adj_info), embed_dim])
+        self.adj_info = adj_info
+        self.ts_info = ts_info
+        self.embeds = glorot([len(adj_info), embed_dim],
+                             name="node_emebddings")
         if features is None:
             self.features = self.embeds
         else:
-            self.features = tf.Variable(tf.constant(
-                features, dtype=tf.float32), trainable=False)
-            if not self.embeds is None:
-                self.features = tf.concat([self.embeds, self.features], axis=1)
-        self.degress = degrees
-        self.concat = concat
+            self.features = tf.Variable(
+                tf.constant(features, dtype=tf.float32), trainable=False)
+            self.features = tf.concat([self.embeds, self.features], axis=1)
 
+        self.layer_infos = layer_infos
+        self.ctx_layer_infos = context_layer_infos
         self.dims = [
             (0 if features is None else features.shape[1]) + embed_dim]
+        self.ctx_dims = [self.dims[0]]
         self.dims.extend(
             [layer_infos[i].output_dim for i in range(len(layer_infos))])
-        self.batch_size = batch_size
-        self.placeholders = placeholders
-        self.layer_infos = layer_infos
-        self.context_layer_infos = context_layer_infos
-        self.context_dims = [
-            (0 if features is None else features.shape[1]) + embed_dim]
-        self.context_dims.extend(
-            [layer_infos[i].output_dim for i in range(len(context_layer_infos))])
+        self.ctx_dims.extend(
+            [context_layer_infos[i].output_dim for i in range(len(context_layer_infos))])
+        # Attention layer output dim
+        assert(self.dims[-1] == self.ctx_dims[-1])
+        self.dims.append(self.dims[-1])
+        self.ctx_dims.append(self.ctx_dims[-1])
 
+        self.placeholders = placeholders
+        self.sampler = sampler
+        self.bipart = bipart
+        self.n_users = n_users
+        self.degrees = degrees[n_users:]
+        self.concat = concat
         self.optimizer = tf.train.AdamOptimizer(
-            learning_rate=learning_rate)
+            learning_rate=FLAGS.learning_rate)
         self.build()
 
+    @timeit
     def sample(self, inputs, timestamp, layer_infos, batch_size):
+        # for neg_samples and context_samples
         samples = [inputs]
         timemasks = [timestamp]
-        support_size = batch_size
+        support_size = 1
         support_sizes = [support_size]
         for k in range(len(layer_infos)):
             t = len(layer_infos) - k - 1
-            support_size *= layer_infos[t].num_samples
-            sampler = layer_infos[t].neigh_sampler
-            node, tsmask = sampler((samples[k], timemasks[k], support_size,
-                                    layer_infos[t].num_samples))
+            num_samples = layer_infos[t].num_samples
+            node, tmask = self.sampler(
+                (samples[k], timemasks[k], batch_size, num_samples))
             samples.append(tf.reshape(node, [-1]))
-            timemasks.append(tf.reshape(tsmask, [-1]))
+            timemasks.append(tf.reshape(tmask, [-1]))
+            batch_size *= num_samples
+            support_size *= num_samples
             support_sizes.append(support_size)
-        return samples, support_sizes
+        return samples, timemasks, support_sizes
 
-    def aggregate(self, samples, input_features, dims, num_samples, support_sizes,
-                  batch_size=None, aggregators=None, name=None, concat=False):
+    def aggregate(self, samples, dims, num_samples, support_sizes,
+                  aggregators=None, batch_size=None, name=None, concat=False):
         if batch_size is None:
             batch_size = self.batch_size
 
         hidden = [tf.nn.embedding_lookup(
-            input_features, node_samples) for node_samples in samples]
+            self.features, nodes) for nodes in samples]
+
         if aggregators is None:
             aggregators = []
-            for layer in range(len(num_samples)-1):
+            # len(num_samples) = len(layer_infos) = len(dims) - 1 = len(support_sizes) - 1
+            for layer in range(len(num_samples)):
                 dim_mult = 2 if concat and (layer != 0) else 1
+                if layer == len(num_samples) - 1:
+                    act = tf.nn.relu
+                else:
+                    def act(x): return x
                 agg = self.aggregator_cls(
-                    dim_mult*dims[layer], dims[layer+1], act=lambda x: x, name=name, concat=concat)
+                    dim_mult*dims[layer], dims[layer+1], act=act, name=name, concat=concat)
                 aggregators.append(agg)
-
-            dim_mult = 2 if concat else 1
-            agg = self.aggregator_cls(
-                dim_mult*dims[-2], dims[-1], name=name, concat=concat)
-            aggregators.append(agg)
 
         for layer in range(len(num_samples)):
             next_hidden = []
             agg = aggregators[layer]
-            for hop in range(len(num_samples)-layer):
+            for hop in range(len(num_samples) - layer):
                 dim_mult = 2 if concat and (layer != 0) else 1
                 neigh_dims = [batch_size * support_sizes[hop],
-                              num_samples[len(num_samples)-hop-1],
-                              dim_mult*dims[layer]]
+                              dim_mult * dims[layer]]
                 h = agg((hidden[hop], tf.reshape(hidden[hop+1], neigh_dims)))
                 next_hidden.append(h)
             hidden = next_hidden
         return hidden[0], aggregators
 
     def _build(self):
-        labels = tf.reshape(tf.cast(self.placeholders["batch_to"], dtype=tf.int64), [
-                            self.batch_size, 1])
-        self.neg_samples, _, _ = (tf.nn.fixed_unigram_candidate_sampler(
+        samples_from, _, support_sizes = self.sample(
+            self.batch_from, self.timestamp, self.layer_infos, FLAGS.batch_size)
+        samples_to, _, _ = self.sample(
+            self.batch_to, self.timestamp, self.layer_infos, FLAGS.batch_size)
+        num_samples = [layer.num_samples for layer in self.layer_infos]
+        self.embed_from, self.aggs = self.aggregate(
+            samples_from, self.dims, num_samples, support_sizes, concat=self.concat)
+        self.embed_to, _ = self.aggregate(
+            samples_to, self.dims, num_samples, support_sizes, self.aggs, concat=self.concat)
+
+        labels = tf.reshape(tf.cast(self.placeholders["batch_to"], dtype=tf.int64),
+                            [self.batch_size, 1])
+        self.batch_neg, _, _ = (tf.nn.fixed_unigram_candidate_sampler(
             true_classes=labels,
             num_true=1,
             num_sampled=FLAGS.neg_sample_size,
             unique=False,
-            range_max=len(self.degress),
+            range_max=len(self.degrees),
             distortion=0.75,
-            unigrams=self.degress.tolist()))
+            unigrams=self.degrees.tolist()))
+        self.neg_ts = tf.random.shuffle(self.timestamp)[:FLAGS.neg_sample_size]
+        # self.neg_ts = self.repeat_vector(self.timestamp, FLAGS.neg_sample_size)
+        # self.batch_neg = tf.tile(self.batch_neg, [self.batch_size])
+        samples_neg, _, _ = self.sample(
+            self.batch_neg, self.neg_ts, self.layer_infos, FLAGS.neg_sample_size)
+        self.embed_neg, _ = self.aggregate(
+            samples_neg, self.dims, num_samples, support_sizes, self.aggs, concat=self.concat)
 
-        from_samples, support_sizes = self.sample(
-            self.batch_from, self.timestamp, self.layer_infos, FLAGS.batch_size)
-        to_samples, support_sizes = self.sample(
-            self.batch_to, self.timestamp, self.layer_infos, FLAGS.batch_size)
-        num_samples = [
-            layer_info.num_samples for layer_info in self.layer_infos]
-        # self.hidden_from, self.aggs = self.aggregate(
-        #     from_samples, [self.features], self.dims, num_samples, support_sizes, concat=self.concat)
-        # self.hidden_to, _ = self.aggregate(
-        #     to_samples, [self.features], self.dims, num_samples, support_sizes, aggregators=self.aggs, concat=self.concat)
+        context_size = FLAGS.context_size * FLAGS.batch_size
+        ctx_samples_from, _, ctx_support_sizes = self.sample(
+            self.context_from, self.context_timestamp, self.ctx_layer_infos, context_size)
+        ctx_samples_to, _, _ = self.sample(
+            self.context_to, self.context_timestamp, self.ctx_layer_infos, context_size)
+        ctx_num_samples = [layer.num_samples for layer in self.ctx_layer_infos]
+        self.ctx_embed_from, self.ctx_aggs = self.aggregate(
+            ctx_samples_from, self.ctx_dims, ctx_num_samples, ctx_support_sizes, concat=self.concat)
+        self.ctx_embed_to, self.ctx_aggs = self.aggregate(
+            ctx_samples_to, self.ctx_dims, ctx_num_samples, ctx_support_sizes, self.ctx_aggs, concat=self.concat)
+        self.context_embed = tf.concat(
+            [self.ctx_embed_from, self.ctx_embed_to], axis=0)
 
-        neg_timestamp = tf.tile(self.timestamp, [FLAGS.neg_sample_size])
-        self.neg_timestamp = tf.reshape(tf.transpose(tf.reshape(
-            neg_timestamp, shape=[-1, FLAGS.neg_sample_size])), shape=[-1])
-        neg_samples = tf.tile(self.neg_samples, [self.batch_size])
-        neg_samples, neg_support_sizes = self.sample(
-            neg_samples, self.neg_timestamp, self.layer_infos, FLAGS.neg_sample_size * FLAGS.batch_size)
-        # self.hidden_neg, _ = self.aggregate(neg_samples, [self.features], self.dims, num_samples,
-                                            # neg_support_sizes, batch_size=FLAGS.neg_sample_size, aggregators=self.aggs, concat=self.concat)
-
-        context_froms, support_sizes = self.sample(
-            self.context_from, self.context_timestamp, self.context_layer_infos, FLAGS.context_size * FLAGS.batch_size)
-        context_tos, _ = self.sample(
-            self.context_to, self.context_timestamp, self.context_layer_infos)
-        num_samples = [
-            layer_info.num_samples for layer_info in self.context_layer_infos]
-        # self.ctxhid_from, self.context_aggs = self.aggregate(
-            # context_froms, [self.features], self.context_dims, num_samples, support_sizes, concat=self.concat)
-        # self.ctxhid_to, _ = self.aggregate(
-            # context_tos, [self.features], self.context_dims, num_samples, support_sizes, concat=self.concat)
-        self.context_hidden = tf.concat(
-            [self.ctxhid_from, self.ctxhid_to], axis=0)
-
-        att_agg = AttentionAggregator(self.dims[0], self.dims[-1])
-        self.output_from = att_agg((self.hidden_from, self.context_hidden))
-        self.output_to = att_agg((self.hidden_to, self.context_hidden))
-        self.output_neg = att_agg((self.hidden_neg, self.context_hidden))
+        dim_mult = 2 if self.concat else 1
+        att_agg = AttentionAggregator(
+            dim_mult * self.dims[-1], dim_mult * self.dims[-1])
+        self.output_from = att_agg((self.embed_from, self.context_embed))
+        self.output_to = att_agg((self.embed_to, self.context_embed))
+        self.output_neg = att_agg((self.embed_neg, self.context_embed))
 
         dim_mult = 2 if self.concat else 1
         self.link_pred_layer = BipartiteEdgePredLayer(
-            dim_mult * self.dims[-1], dim_mult*self.dims[-1], self.placeholders, act=tf.nn.sigmoid, bilinear_weights=False, name="edge_predict")
-
+            dim_mult * self.dims[-1], dim_mult * self.dims[-1], self.placeholders, act=tf.nn.sigmoid, bilinear_weights=False, name="edge_predict")
         self.output_from = tf.nn.l2_normalize(self.output_from, 1)
         self.output_to = tf.nn.l2_normalize(self.output_to, 1)
         self.output_neg = tf.nn.l2_normalize(self.output_neg, 1)
+
+        self.sample_ops = [samples_from, samples_to,
+                           samples_neg, ctx_samples_from, ctx_samples_to]
+        self.embed_ops = [self.embed_from, self.embed_to,
+                          self.embed_neg, self.ctx_embed_from, self.ctx_embed_to]
+
+    def repeat_vector(self, vec, times):
+        vec = tf.reshape(vec, [-1, 1])
+        vec = tf.tile(vec, [1, times])
+        return tf.reshape(vec, [-1])
+
+    def repeat_matrix(self, mat, times):
+        """Repeat matrix across axis 0"""
+        dim = tf.shape(mat)[1]
+        mat = tf.tile(mat, [1, times])
+        return tf.reshape(mat, [-1, dim])
 
     def build(self):
         self._build()
@@ -255,7 +287,7 @@ class GraphTemporalAttention(GeneralizedModel):
         self.opt_op = self.optimizer.apply_gradients(clipped_grads_and_vars)
 
     def _loss(self):
-        for aggregator in self.aggs + self.context_aggs:
+        for aggregator in self.aggs + self.ctx_aggs:
             for var in aggregator.vars.values():
                 self.loss += FLAGS.weight_decay * tf.nn.l2_loss(var)
 
@@ -279,16 +311,3 @@ class GraphTemporalAttention(GeneralizedModel):
         self.mrr = tf.reduce_mean(
             tf.div(1.0, tf.cast(self.ranks[:, -1] + 1, tf.float32)))
         tf.summary.scalar('mrr', self.mrr)
-
-
-if __name__ == "__main__":
-    # check AttentionAggregator work
-    config = tf.ConfigProto(log_device_placement=False)
-    config.gpu_options.allow_growth = True  # pylint: disable=no-member
-    config.allow_soft_placement = True
-    tf.enable_eager_execution(config=config)
-
-    self_vecs = tf.random.normal([10, 128])
-    neigh_vecs = tf.random.normal([250, 128])
-    agg = AttentionAggregator(128, 128)
-    print(agg((self_vecs, neigh_vecs)))

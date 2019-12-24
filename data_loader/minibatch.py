@@ -82,7 +82,7 @@ class TruncatedTemporalEdgeBatchIterator(object):
         self.batch_size = batch_size
         self.context_size = context_size
         self.max_degree = max_degree
-        self.adj_ids, self.adj_tss, self.deg = self.construct_adj()
+        self.adj_ids, self.adj_tss, self.degrees = self.construct_adj()
         self.neg_sample_size = neg_sample_size
         self.train_test_split()
         self.batch_num = 0
@@ -172,7 +172,7 @@ class TruncatedTemporalEdgeBatchIterator(object):
         """
         context_idx = [np.arange(idx-self.context_size, idx)
                        for idx in batch_idx]
-        context_idx = np.maximum(context_idx, 0)
+        context_idx = np.concatenate(np.maximum(context_idx, 0))
         context_edges = [self.edges.iloc[indices] for indices in context_idx]
         return context_edges
 
@@ -192,7 +192,7 @@ class TruncatedTemporalEdgeBatchIterator(object):
         # for eager execution debug
         # feed_dict["batch_from"] = batch_from
         # feed_dict["timestamp"] = timestamp
-        # feed_dict.update({self.placeholders["batch_size"]: self.batch_size})
+        feed_dict.update({self.placeholders["batch_size"]: len(batch_idx)})
         feed_dict.update({self.placeholders["batch_from"]: batch_from})
         feed_dict.update({self.placeholders["batch_to"]: batch_to})
         feed_dict.update({self.placeholders["timestamp"]: timestamp})
@@ -206,12 +206,14 @@ class TruncatedTemporalEdgeBatchIterator(object):
 
         return feed_dict
 
-    def val_feed_dict(self, size=None):
+    def val_feed_dict(self, size):
         val_idx = np.random.permutation(self.val_idx)
+        val_idx = val_idx[:size]
         return self.batch_feed_dict(val_idx)
 
-    def test_feed_dict(self):
+    def test_feed_dict(self, size):
         test_idx = np.random.permutation(self.test_idx)
+        test_idx = test_idx[:size]
         return self.batch_feed_dict(test_idx)
 
     def shuffle(self):

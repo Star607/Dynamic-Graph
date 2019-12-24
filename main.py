@@ -37,11 +37,11 @@ flags.DEFINE_boolean(
 # logging, saving, validation settings etc.
 flags.DEFINE_boolean('save_embeddings', True,
                      'whether to save embeddings for all nodes after training')
-flags.DEFINE_string('base_log_dir', '.',
+flags.DEFINE_string('base_log_dir', 'log/',
                     'base directory for logging and saving embeddings')
-flags.DEFINE_integer('validate_iter', 5000,
+flags.DEFINE_integer('validate_iter', 1000,
                      "how often to run a validation minibatch.")
-flags.DEFINE_integer('validate_batch_size', 256,
+flags.DEFINE_integer('validate_batch_size', 128,
                      "how many nodes per validation sample.")
 flags.DEFINE_integer('gpu', 0, "which gpu to use.")
 flags.DEFINE_integer('print_every', 50, "How often to print training info.")
@@ -52,12 +52,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 def log_dir():
-    log_dir = FLAGS.base_log_dir + "/unsup-" + \
-        FLAGS.dataset
-    log_dir += "/{model:s}_{model_size:s}_{lr:0.6f}/".format(
-        model=FLAGS.model,
-        model_size=FLAGS.model_size,
-        lr=FLAGS.learning_rate)
+    log_dir = FLAGS.base_log_dir + "/unsup-" + FLAGS.dataset
+    log_dir += "/GTA_{lr:0.6f}/".format(lr=FLAGS.learning_rate)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     return log_dir
@@ -134,18 +130,17 @@ def construct_placeholders():
 def train(edges, nodes):
     placeholders = construct_placeholders()
     batch = TruncatedTemporalEdgeBatchIterator(
-        edges, nodes, placeholders, batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree)
-    sampler = MaskNeighborSampler(batch.adj_ids, batch.adj_tss)
-    # layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_1, FLAGS.dim_1),
-                #    SAGEInfo("node", sampler, FLAGS.samples_2, FLAGS.dim_2)]
-
-    layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_1, FLAGS.dim_1)]
+        edges, nodes, placeholders, batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree, context_size=FLAGS.context_size)
+    adj_info, ts_info = batch.adj_ids, batch.adj_tss
+    sampler = MaskNeighborSampler(adj_info, ts_info)
+    layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_1, FLAGS.dim_1),
+                   SAGEInfo("node", sampler, FLAGS.samples_2, FLAGS.dim_2)]
+    ctx_layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_1, FLAGS.dim_1)]
     model = GraphTemporalAttention(
-        placeholders, None,
-        (batch.adj_ids, batch.adj_tss), batch.deg, layer_infos=layer_infos, context_layer_infos=layer_infos, batch_size=FLAGS.batch_size, learning_rate=FLAGS.learning_rate,
-        concat=FLAGS.concat, embed_dim=128)
+        placeholders, None, adj_info, ts_info, batch.degrees, layer_infos,
+        ctx_layer_infos, sampler)
 
-    config = tf.ConfigProto(log_device_placement=FLAGS.log_device_placement)
+    config = tf.ConfigProto(log_device_placement=False)
     config.gpu_options.allow_growth = True
     config.allow_soft_placement = True
 
@@ -157,6 +152,12 @@ def train(edges, nodes):
     # Init variables
     sess.run(tf.global_variables_initializer())
 
+    t = time.time()
+    feed_dict = batch.next_train_batch()
+    sess.run(model.sample_ops, feed_dict)
+    print("Graph compilation time: {:.2f}s".format(time.time() - t))
+
+    batch_num = len(batch.train_idx) // FLAGS.batch_size
     total_steps = 0
     avg_time = 0.0
     epoch_val_costs = []
@@ -168,18 +169,22 @@ def train(edges, nodes):
         while not batch.end():
             feed_dict = batch.next_train_batch()
             t = time.time()
+            # outs = sess.run(model.opt_op, feed_dict)
             outs = sess.run([merged, model.opt_op, model.loss, model.ranks,
                              model.aff_all, model.mrr, model.output_from], feed_dict)
             train_cost = outs[2]
             train_mrr = outs[5]
-            if itr % FLAGS.validate_itr == 0:
+            if itr % FLAGS.validate_iter == 0:
                 val_cost, ranks, val_mrr, duration = evaluate(
-                    sess, model, batch, size=FLAGS.validate_batch_size)
+                    sess, model, batch, size=FLAGS.batch_size)
                 epoch_val_costs[-1] += val_cost
             if total_steps % FLAGS.print_every == 0:
                 summary_writer.add_summary(outs[0], total_steps)
             avg_time = (avg_time * total_steps +
                         time.time() - t) / (total_steps + 1)
+            # if total_steps % FLAGS.print_every == 0:
+            #     print("batch {:d} time={:.2f}".format(
+            #         batch.batch_num, avg_time))
             if total_steps % FLAGS.print_every == 0:
                 print("Iter:", '%04d' % itr,
                       "train_loss=", "{:.5f}".format(train_cost),
@@ -190,27 +195,28 @@ def train(edges, nodes):
 
             itr += 1
             total_steps += 1
-            if total_steps > FLAGS.total_steps:
+            if total_steps > FLAGS.max_total_steps:
                 break
-        if total_steps > FLAGS.total_steps:
+        print("time: {:.2f}s".format(avg_time * batch_num))
+        if total_steps > FLAGS.max_total_steps:
             break
     print("Optimization Finishied!")
-    val_cost, val_f1_mac, duration = incremental_evaluate(
-        sess, model, batch, FLAGS.batch_size)
-    print("Full validation stats:",
-          "loss=", "{:.5f}".format(val_cost),
-          "f1_macro=", "{:.5f}".format(val_f1_mac),
-          "time=", "{:.5f}".format(duration))
-    with open(log_dir() + "val_stats.txt", "w") as fp:
-        fp.write("loss={:.5f} f1_macro={:.5f} time={:.5f}".
-                 format(val_cost, val_f1_mac, duration))
+    # val_cost, val_f1_mac, duration = incremental_evaluate(
+    #     sess, model, batch, FLAGS.batch_size)
+    # print("Full validation stats:",
+    #       "loss=", "{:.5f}".format(val_cost),
+    #       "f1_macro=", "{:.5f}".format(val_f1_mac),
+    #       "time=", "{:.5f}".format(duration))
+    # with open(log_dir() + "val_stats.txt", "w") as fp:
+    #     fp.write("loss={:.5f} f1_macro={:.5f} time={:.5f}".
+    #              format(val_cost, val_f1_mac, duration))
 
-    print("Writing test set stats to file (don't peak!)")
-    val_cost, val_f1_mac, duration = incremental_evaluate(
-        sess, model, batch, FLAGS.batch_size, test=True)
-    with open(log_dir() + "test_stats.txt", "w") as fp:
-        fp.write("loss={:.5f} f1_macro={:.5f}".
-                 format(val_cost, val_f1_mac))
+    # print("Writing test set stats to file (don't peak!)")
+    # val_cost, val_f1_mac, duration = incremental_evaluate(
+    #     sess, model, batch, FLAGS.batch_size, test=True)
+    # with open(log_dir() + "test_stats.txt", "w") as fp:
+    #     fp.write("loss={:.5f} f1_macro={:.5f}".
+    #              format(val_cost, val_f1_mac))
 
 
 def main(argv=None):
