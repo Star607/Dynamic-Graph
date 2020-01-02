@@ -128,3 +128,5 @@ class BipartiteEdgePredLayer(Layer):
 
     def weights_norm(self):
         return tf.nn.l2_norm(self.vars['weights'])
+
+    pass

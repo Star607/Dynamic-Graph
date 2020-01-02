@@ -15,7 +15,8 @@ flags = tf.app.flags
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('dataset', 'CTDNE-fb-forum', 'experiment dataset')
-flags.DEFINE_float('learning_rate', 0.00001, 'initial learning rate.')
+flags.DEFINE_string('method', 'GTA', 'experiment method')
+flags.DEFINE_float('learning_rate', 0.0001, 'initial learning rate.')
 flags.DEFINE_integer('epochs', 1, 'number of epochs to train.')
 flags.DEFINE_float('dropout', 0.0, 'dropout rate (1 - keep probability).')
 flags.DEFINE_float('weight_decay', 0.0,
@@ -39,10 +40,6 @@ flags.DEFINE_boolean('save_embeddings', True,
                      'whether to save embeddings for all nodes after training')
 flags.DEFINE_string('base_log_dir', 'log/',
                     'base directory for logging and saving embeddings')
-flags.DEFINE_integer('validate_iter', 1000,
-                     "how often to run a validation minibatch.")
-flags.DEFINE_integer('validate_batch_size', 128,
-                     "how many nodes per validation sample.")
 flags.DEFINE_integer('gpu', 0, "which gpu to use.")
 flags.DEFINE_integer('print_every', 50, "How often to print training info.")
 flags.DEFINE_integer('max_total_steps', 10**10,
@@ -52,8 +49,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 def log_dir():
-    log_dir = FLAGS.base_log_dir + "/unsup-" + FLAGS.dataset
-    log_dir += "/GTA_{lr:0.6f}/".format(lr=FLAGS.learning_rate)
+    log_dir = FLAGS.base_log_dir + "{}-{}".format(FLAGS.dataset, FLAGS.method)
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     return log_dir
@@ -138,7 +134,7 @@ def train(edges, nodes):
     ctx_layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_1, FLAGS.dim_1)]
     model = GraphTemporalAttention(
         placeholders, None, adj_info, ts_info, batch.degrees, layer_infos,
-        ctx_layer_infos, sampler)
+        ctx_layer_infos, sampler, bipart=batch.bipartite, n_users=batch.n_users)
 
     config = tf.ConfigProto(log_device_placement=False)
     config.gpu_options.allow_growth = True
@@ -167,18 +163,23 @@ def train(edges, nodes):
         print("Epoch %04d" % (epoch+1))
         epoch_val_costs.append(0)
         while not batch.end():
-            feed_dict = batch.next_train_batch()
             t = time.time()
+            feed_dict = batch.next_train_batch()
             # outs = sess.run(model.opt_op, feed_dict)
             outs = sess.run([merged, model.opt_op, model.loss, model.ranks,
                              model.aff_all, model.mrr, model.output_from], feed_dict)
             train_cost = outs[2]
             train_mrr = outs[5]
-            if itr % FLAGS.validate_iter == 0:
+
+            if total_steps % FLAGS.print_every == 0:
                 val_cost, ranks, val_mrr, duration = evaluate(
                     sess, model, batch, size=FLAGS.batch_size)
                 epoch_val_costs[-1] += val_cost
-            if total_steps % FLAGS.print_every == 0:
+                sess.run(model.print_op, feed_dict)
+                embeds = sess.run(model.embed_ops, feed_dict)
+                # print("embed_from: ", embeds[0][:5, :5])
+                # print("embed_to: ", embeds[1][:5, :5])
+                # print("embed_neg: ", embeds[2][:5, :5])
                 summary_writer.add_summary(outs[0], total_steps)
             avg_time = (avg_time * total_steps +
                         time.time() - t) / (total_steps + 1)
@@ -221,7 +222,7 @@ def train(edges, nodes):
 
 def main(argv=None):
     print("Loading training data...")
-    edges, nodes = load_data(dataset=FLAGS.dataset)
+    edges, nodes = load_data(datadir="./graph_data", dataset=FLAGS.dataset)
     print("Done loading training data...")
     train(edges, nodes)
 

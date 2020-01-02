@@ -50,6 +50,8 @@ class TruncatedTemporalEdgeBatchIterator(object):
         self.id2idx = {row["node_id"]: index + 1
                        for index, row in nodes.iterrows()}
         self.id2idx["padding_node"] = 0
+        self.bipartite = len(nodes["role"].unique()) > 1
+        self.n_users = sum(nodes["role"] == "user") + 1
 
         edges_full = self._node_prune(edges)
         edges_full["from_node_id"] = edges_full["from_node_id"].map(
@@ -152,8 +154,21 @@ class TruncatedTemporalEdgeBatchIterator(object):
         self.val_idx = list(range(train_end_idx, val_end_idx))
         self.test_idx = list(range(val_end_idx, len(self.edges)))
 
-    def neg_edges(self, batch_edges):
-        pass
+    def neg_toids(self, batch_to, times=1):
+        """Sampling negative to_nodes with respect to from_nodes
+        """
+        # n_users is set to 1 as default, avoid dummy node 0
+
+        pools = sorted(list(set(self.id2idx) - set(range(self.n_users))))
+        neg_to = []
+        for i in range(len(batch_to)):
+            # swap batch_to[i] with its last element
+            idx = batch_to[i] - self.n_users
+            pools[idx], pools[-1] = pools[-1], pools[idx]
+            neg_pool = np.ranmdom.permutation(pools[:-1])[:times]
+            neg_to.append(neg_pool)
+            pools[idx], pools[-1] = pools[-1], pools[idx]
+        return neg_to
 
     def end(self):
         return self.batch_num * self.batch_size >= len(self.train_idx)
@@ -173,8 +188,8 @@ class TruncatedTemporalEdgeBatchIterator(object):
         context_idx = [np.arange(idx-self.context_size, idx)
                        for idx in batch_idx]
         context_idx = np.concatenate(np.maximum(context_idx, 0))
-        context_edges = [self.edges.iloc[indices] for indices in context_idx]
-        return context_edges
+        # context_edges = [self.edges.iloc[indices] for indices in context_idx]
+        return self.edges.iloc[context_idx]
 
     def batch_feed_dict(self, batch_idx):
         # edges has been dropped, but their indices didn't change, so it is suitable to use DataFrame.iloc[]
@@ -184,9 +199,12 @@ class TruncatedTemporalEdgeBatchIterator(object):
         timestamp = batch_edges["timestamp"].tolist()
 
         context_edges = self.get_context_edges(batch_idx)
-        context_from = [df["from_node_id"].tolist() for df in context_edges]
-        context_to = [df["to_node_id"].tolist() for df in context_edges]
-        context_timestamp = [df["timestamp"].tolist() for df in context_edges]
+        # context_from = [df["from_node_id"].tolist() for df in context_edges]
+        # context_to = [df["to_node_id"].tolist() for df in context_edges]
+        # context_timestamp = [df["timestamp"].tolist() for df in context_edges]
+        context_from = context_edges["from_node_id"].tolist()
+        context_to = context_edges["to_node_id"].tolist()
+        context_timestamp = context_edges["timestamp"].tolist()
 
         feed_dict = dict()
         # for eager execution debug
