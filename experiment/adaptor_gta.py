@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, roc_auc_score
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
-from data_loader.minibatch import load_data, TruncatedTemporalEdgeBatchIterator
+from data_loader.minibatch import load_data, TemporalEdgeBatchIterator
 from data_loader.neigh_samplers import MaskNeighborSampler, TemporalNeighborSampler
 from model.gta import GraphTemporalAttention, SAGEInfo
 
@@ -20,7 +20,7 @@ class AdaptorGTA(object):
         self.edges, self.nodes = load_data(
             datadir="../graph_data", dataset=FLAGS.dataset)
         self.placeholders = self.construct_placeholders()
-        self.batch = TruncatedTemporalEdgeBatchIterator(
+        self.batch = TemporalEdgeBatchIterator(
             self.edges, self.nodes, self.placeholders, batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree, context_size=FLAGS.context_size)
 
         self.sess = None

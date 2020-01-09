@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, roc_auc_score
 
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS

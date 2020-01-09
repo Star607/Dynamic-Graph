@@ -2,7 +2,7 @@ import time
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-# import tensorflow.compat.v1 as tf
+# import tensorflow as tf
 from tensorflow.layers import conv1d
 from collections import namedtuple
 
@@ -146,7 +146,7 @@ class AttentionAggregator(Layer):
 class GraphTemporalAttention(GeneralizedModel):
     def __init__(self, placeholders, features, adj_info, ts_info, degrees, layer_infos,
                  context_layer_infos, sampler, bipart=False, n_users=1, edge_features=None,
-                 concat=False, aggregator_type="mean", embed_dim=128, **kwargs):
+                 concat=False, aggregator_type="meanpool", embed_dim=128, **kwargs):
         super(GraphTemporalAttention, self).__init__(**kwargs)
         if aggregator_type == "mean":
             self.aggregator_cls = MeanAggregator
@@ -325,9 +325,9 @@ class GraphTemporalAttention(GeneralizedModel):
         dim_mult = 2 if self.concat else 1
         self.link_pred_layer = BipartiteEdgePredLayer(
             dim_mult * self.dims[-1], dim_mult * self.dims[-1], self.placeholders, act=tf.nn.sigmoid, bilinear_weights=False, neg_sample_weights=1/20, name="edge_predict")
-        self.output_from = tf.nn.l2_normalize(self.output_from, 1)
-        self.output_to = tf.nn.l2_normalize(self.output_to, 1)
-        self.output_neg = tf.nn.l2_normalize(self.output_neg, 1)
+        # self.output_from = tf.nn.l2_normalize(self.output_from, 1)
+        # self.output_to = tf.nn.l2_normalize(self.output_to, 1)
+        # self.output_neg = tf.nn.l2_normalize(self.output_neg, 1)
 
         self.sample_ops = [samples_from, samples_to,
                            samples_neg]

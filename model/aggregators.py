@@ -1,4 +1,4 @@
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
 from model.layers import Layer, Dense
 from model.inits import glorot, zeros

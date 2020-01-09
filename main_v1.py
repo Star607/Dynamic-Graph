@@ -1,11 +1,11 @@
 import os
 import time
 import numpy as np
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
-from data_loader.minibatch import load_data, TruncatedTemporalEdgeBatchIterator
+from data_loader.minibatch import load_data, TemporalEdgeBatchIterator
 from data_loader.neigh_samplers import MaskNeighborSampler, TemporalNeighborSampler
-from model.gta import GraphTemporalAttention, SAGEInfo
+from model.gta_v1 import GraphTemporalAttention, SAGEInfo
 
 # from tensorflow.python.util import deprecation
 # deprecation._PRINT_DEPRECATION_WARNINGS = False
@@ -59,7 +59,7 @@ def log_dir():
 
 def evaluate(sess, model, minibatch_iter, size=None):
     t_test = time.time()
-    feed_dict_val = minibatch_iter.val_feed_dict(size)
+    feed_dict_val = minibatch_iter.val_feed_dict()
     outs_val = sess.run([model.loss, model.ranks, model.mrr],
                         feed_dict=feed_dict_val)
     return outs_val[0], outs_val[1], outs_val[2], (time.time() - t_test)
@@ -110,22 +110,23 @@ def incremental_evaluate(sess, model, minibatch_iter, size, test=False):
 
 
 def construct_placeholders():
-    # Define placeholders
+    # Define placeholders: (None,) means 1-D tensor
     placeholders = {
-        "batch_from": tf.placeholder(tf.int32, shape=(None), name="batch_from"),
-        "batch_to": tf.placeholder(tf.int32, shape=(None), name="batch_to"),
-        "timestamp": tf.placeholder(tf.float64, shape=(None), name="timestamp"),
+        "batch_from": tf.placeholder(tf.int32, shape=(None,), name="batch_from"),
+        "batch_to": tf.placeholder(tf.int32, shape=(None,), name="batch_to"),
+        "batch_neg": tf.placeholder(tf.int32, shape=(None,), name="batch_neg"),
+        "timestamp": tf.placeholder(tf.float64, shape=(None,), name="timestamp"),
         "batch_size": tf.placeholder(tf.int32, name="batch_size"),
-        "context_from": tf.placeholder(tf.int32, shape=(None), name="context_from"),
-        "context_to": tf.placeholder(tf.int32, shape=(None), name="context_to"),
-        "context_timestamp": tf.placeholder(tf.float64, shape=(None), name="timestamp"),
+        "context_from": tf.placeholder(tf.int32, shape=(None,), name="context_from"),
+        "context_to": tf.placeholder(tf.int32, shape=(None,), name="context_to"),
+        "context_timestamp": tf.placeholder(tf.float64, shape=(None,), name="timestamp"),
     }
     return placeholders
 
 
 def train(edges, nodes):
     placeholders = construct_placeholders()
-    batch = TruncatedTemporalEdgeBatchIterator(
+    batch = TemporalEdgeBatchIterator(
         edges, nodes, placeholders, batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree, context_size=FLAGS.context_size)
     adj_info, ts_info = batch.adj_ids, batch.adj_tss
     sampler = MaskNeighborSampler(adj_info, ts_info)

@@ -7,7 +7,7 @@ import keras.backend as K
 import networkx as nx
 import numpy as np
 import pandas as pd
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 from numba import jit
 
 flags = tf.app.flags

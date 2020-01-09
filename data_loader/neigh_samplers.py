@@ -4,7 +4,7 @@ from __future__ import print_function
 from model.layers import Layer
 
 import numpy as np
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 # flags = tf.app.flags
 # FLAGS = flags.FLAGSs
 
@@ -54,7 +54,10 @@ class MaskNeighborSampler(Layer):
         # shape: (num_ids, max_degree) < (num_ids, 1)
         # expand dims according to numpy broadcast rules
         mask = tf.less(ts_lists, tf.expand_dims(tss, axis=1))
-        indices = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
+        assert_op = tf.debugging.Assert(
+            tf.equal(tf.shape(tf.shape(mask))[-1], 2), [tf.shape(ids), tf.shape(adj_lists), tf.shape(mask)])
+        with tf.control_dependencies([assert_op]):
+            indices = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
         # Attention! the last batch is always smaller than a normal batch
         # Padding indices to a vector of batch_size length
         indices = tf.concat(

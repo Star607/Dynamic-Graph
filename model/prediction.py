@@ -3,7 +3,7 @@ from __future__ import print_function
 
 from model.inits import zeros
 from model.layers import Layer
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS

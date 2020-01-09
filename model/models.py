@@ -1,6 +1,6 @@
 from collections import namedtuple
 
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 import math
 
 import model.layers as layers

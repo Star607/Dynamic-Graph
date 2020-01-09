@@ -1,9 +1,9 @@
 import os
 import time
 import numpy as np
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
-from data_loader.minibatch import load_data, TruncatedTemporalEdgeBatchIterator
+from data_loader.minibatch import load_data, TemporalEdgeBatchIterator
 from data_loader.neigh_samplers import MaskNeighborSampler, TemporalNeighborSampler
 from model.gta import GraphTemporalAttention, SAGEInfo
 from main import *
@@ -20,7 +20,7 @@ def run(argv=None):
     edges, nodes = load_data(datadir="./graph_data", dataset=FLAGS.dataset)
     print("Done loading training data...")
     placeholders = construct_placeholders()
-    batch = TruncatedTemporalEdgeBatchIterator(
+    batch = TemporalEdgeBatchIterator(
         edges, nodes, placeholders, batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree, context_size=FLAGS.context_size)
     adj_info, ts_info = batch.adj_ids, batch.adj_tss
     sampler = MaskNeighborSampler(adj_info, ts_info)

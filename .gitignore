@@ -7,3 +7,5 @@ log/*
 cuda_example/*
 tf_op/*
 ckpt/*
+results/*
+saved_models/*

@@ -10,7 +10,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K  # pylint: disable=import-error
 from data_loader.neigh_samplers import UniformNeighborSampler, MaskNeighborSampler, TemporalNeighborSampler
@@ -35,7 +35,7 @@ SAGEInfo = namedtuple("SAGEInfo",
                        "output_dim"])
 
 
-class TruncatedTemporalEdgeBatchIterator(object):
+class TemporalEdgeBatchIterator(object):
     """We use a dummy node with index 0, and use id2idx to transform all nodes into continuous integers.
 
     Edges are sorted in temporal ascending order.
@@ -46,12 +46,15 @@ class TruncatedTemporalEdgeBatchIterator(object):
     def __init__(self, edges, nodes, placeholders, batch_size=512, context_size=25, max_degree=100, neg_sample_size=25, **kwargs):
         """Nodes is padded with a dummy node: 0, neg_samples are implemented in models.
         """
+        self.eps = 1e-7
         # id start from 1, avoiding collides with the dummy node 0
-        self.id2idx = {row["node_id"]: index + 1
+        self.id2idx = {row["node_id"]:  row["id_map"]
                        for index, row in nodes.iterrows()}
         self.id2idx["padding_node"] = 0
         self.bipartite = len(nodes["role"].unique()) > 1
-        self.n_users = sum(nodes["role"] == "user") + 1
+        self.n_users = 1
+        if self.bipartite:
+            self.n_users += sum(nodes["role"] == "user")
 
         edges_full = self._node_prune(edges)
         edges_full["from_node_id"] = edges_full["from_node_id"].map(
@@ -62,6 +65,8 @@ class TruncatedTemporalEdgeBatchIterator(object):
         dtypes = edges_full.dtypes
         # Assure the dtype consistency
         dtypes[["from_node_id", "to_node_id"]] = int
+        # Assure timestamp consistency
+        edges_full["timestamp"] = edges_full["timestamp"] + self.eps
         edges_full.loc[len(edges_full)] = [0] * len(edges_full.columns)
         edges_full = edges_full.astype(dtypes).sort_values(by="timestamp")
 
@@ -150,7 +155,8 @@ class TruncatedTemporalEdgeBatchIterator(object):
 
         train_end_idx = int(len(self.edges) * train_ratio)
         val_end_idx = int(len(self.edges) * val_ratio) + train_end_idx
-        self.train_idx = list(range(train_end_idx))
+        # Assure the padding edge not in training set
+        self.train_idx = list(range(1, train_end_idx))
         self.val_idx = list(range(train_end_idx, val_end_idx))
         self.test_idx = list(range(val_end_idx, len(self.edges)))
 
@@ -159,16 +165,20 @@ class TruncatedTemporalEdgeBatchIterator(object):
         """
         # n_users is set to 1 as default, avoid dummy node 0
 
-        pools = sorted(list(set(self.id2idx) - set(range(self.n_users))))
+        # pools = sorted(
+        #     list(set(self.id2idx.values()) - set(range(self.n_users))))
+        # pools = list(range(len(self.id2idx) - self.n_users))
+        pools = list(range(self.n_users, len(self.id2idx)))
         neg_to = []
         for i in range(len(batch_to)):
             # swap batch_to[i] with its last element
             idx = batch_to[i] - self.n_users
+            # print(idx)
             pools[idx], pools[-1] = pools[-1], pools[idx]
-            neg_pool = np.ranmdom.permutation(pools[:-1])[:times]
+            neg_pool = np.random.permutation(pools[:-1])[:times]
             neg_to.append(neg_pool)
             pools[idx], pools[-1] = pools[-1], pools[idx]
-        return neg_to
+        return np.reshape(neg_to, (-1))
 
     def end(self):
         return self.batch_num * self.batch_size >= len(self.train_idx)
@@ -191,17 +201,16 @@ class TruncatedTemporalEdgeBatchIterator(object):
         # context_edges = [self.edges.iloc[indices] for indices in context_idx]
         return self.edges.iloc[context_idx]
 
-    def batch_feed_dict(self, batch_idx):
+    def batch_feed_dict(self, batch_idx, neg_sample_size=1):
         # edges has been dropped, but their indices didn't change, so it is suitable to use DataFrame.iloc[]
         batch_edges = self.edges.iloc[batch_idx]
         batch_from = batch_edges["from_node_id"].tolist()
         batch_to = batch_edges["to_node_id"].tolist()
+        # print(batch_to)
+        batch_neg = self.neg_toids(batch_to, neg_sample_size)
         timestamp = batch_edges["timestamp"].tolist()
 
         context_edges = self.get_context_edges(batch_idx)
-        # context_from = [df["from_node_id"].tolist() for df in context_edges]
-        # context_to = [df["to_node_id"].tolist() for df in context_edges]
-        # context_timestamp = [df["timestamp"].tolist() for df in context_edges]
         context_from = context_edges["from_node_id"].tolist()
         context_to = context_edges["to_node_id"].tolist()
         context_timestamp = context_edges["timestamp"].tolist()
@@ -213,6 +222,7 @@ class TruncatedTemporalEdgeBatchIterator(object):
         feed_dict.update({self.placeholders["batch_size"]: len(batch_idx)})
         feed_dict.update({self.placeholders["batch_from"]: batch_from})
         feed_dict.update({self.placeholders["batch_to"]: batch_to})
+        feed_dict.update({self.placeholders["batch_neg"]: batch_neg})
         feed_dict.update({self.placeholders["timestamp"]: timestamp})
 
         # feed_dict.update(
@@ -224,12 +234,37 @@ class TruncatedTemporalEdgeBatchIterator(object):
 
         return feed_dict
 
-    def val_feed_dict(self, size):
+    @property
+    def all_batch_count(self):
+        def ceil(x): return int(np.ceil(len(x) / self.batch_size))
+        return ceil(self.train_idx), ceil(self.val_idx), ceil(self.test_idx)
+
+    def val_batch(self):
+        val_idx = np.random.permutation(self.val_idx)
+        batch_num = int(np.ceil(len(val_idx) / self.batch_size))
+        start_idx = 0
+        for idx in range(batch_num):
+            start_idx = idx * self.batch_size
+            end_idx = (idx + 1) * self.batch_size
+            yield self.batch_feed_dict(val_idx[start_idx: end_idx])
+
+    def test_batch(self):
+        test_idx = np.random.permutation(self.test_idx)
+        batch_num = int(np.ceil(len(test_idx) / self.batch_size))
+        start_idx = 0
+        for idx in range(batch_num):
+            start_idx = idx * self.batch_size
+            end_idx = (idx + 1) * self.batch_size
+            yield self.batch_feed_dict(test_idx[start_idx: end_idx])
+
+    def val_feed_dict(self):
+        size = self.batch_size
         val_idx = np.random.permutation(self.val_idx)
         val_idx = val_idx[:size]
         return self.batch_feed_dict(val_idx)
 
-    def test_feed_dict(self, size):
+    def test_feed_dict(self):
+        size = self.batch_size
         test_idx = np.random.permutation(self.test_idx)
         test_idx = test_idx[:size]
         return self.batch_feed_dict(test_idx)
@@ -286,7 +321,7 @@ if __name__ == "__main__":
 
     # edges, nodes = load_data(dataset="CTDNE-fb-forum")
     edges, nodes = load_data(dataset="JODIE-reddit")
-    batch = TruncatedTemporalEdgeBatchIterator(edges, nodes, placeholders)
+    batch = TemporalEdgeBatchIterator(edges, nodes, placeholders)
     batch.shuffle()
     print("Preprocessing time:", datetime.now() - start_time)
 

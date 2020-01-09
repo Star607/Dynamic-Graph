@@ -1,4 +1,4 @@
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
 # DISCLAIMER:
 # Parts of this code file were originally forked from
