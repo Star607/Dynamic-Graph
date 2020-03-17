@@ -2,6 +2,7 @@
 .vscode/*
 */__pycache__/*
 *.pyc
+ctdne_data/*
 graph_data/*
 log/*
 cuda_example/*
