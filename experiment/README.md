@@ -8,5 +8,7 @@
 | JODIE |||
 | tNodeEmbed |||
 | HTDE |||
-| GTA | node file of different roles && edge file of timestamps | predict prob for each node pair |
+| EvolveGCN |||
+| TGAT ||| 
+| TEAM | |  |
 
