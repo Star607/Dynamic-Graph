@@ -8,15 +8,18 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, roc_auc_score
 
-import tensorflow as tf
+# import tensorflow as tf
 
-flags = tf.app.flags
-FLAGS = flags.FLAGS
+# flags = tf.app.flags
+# FLAGS = flags.FLAGS
 
 from datetime import datetime
 from collections import defaultdict 
+import time
 
-def data_stats(project_dir="../../ctdne_data/"):
+from adaptors import run_node2vec
+
+def data_stats(project_dir="/nfs/zty/Graph/ctdne_data/"):
     # nodes, edges, d_avg, d_max, timespan(days) 
     fname = [f for f in os.listdir(project_dir) if f.endswith("csv")]
     fname = sorted(fname)
@@ -59,14 +62,16 @@ def to_dataframe(fname=["ia-contact.edges"]):
     pass
 
 
-def train_test_split(train_ratio=0.75, project_dir="../../ctdne_data/", store_dir="../../"):
+def train_test_split(train_ratio=0.75, project_dir="/nfs/zty/Graph/ctdne_data/", store_dir="/nfs/zty/Graph/Dynamic-Graph/"):
     # nodes, edges, d_avg, d_max, timespan(days) 
     fname = [f for f in os.listdir(project_dir) if f.endswith("csv")]
     fname = sorted(fname)
     fpath = [project_dir + f for f in fname]
     for name, path in zip(fname, fpath):
         print("*****{}*****".format(name))
+        start = time.time()
         df = pd.read_csv(path)
+        df = df.drop("state_label", axis=1)
         df = df.sort_values(by="timestamp").reset_index(drop=True)
         train_end_idx = int(len(df) * train_ratio)
         # df.loc contains both start and stop
@@ -81,28 +86,44 @@ def train_test_split(train_ratio=0.75, project_dir="../../ctdne_data/", store_di
         to_edges = test_df["to_node_id"].apply(lambda x: x in unseen_nodes)
         edges = np.logical_or(from_edges, to_edges)
         print("unseen {} nodes, {} edges in test set".format(len(unseen_nodes), sum(edges)))
+        # remove those edges containing unseen nodes
+        test_df = test_df[np.logical_not(edges)]
 
         nodes = list(set(df["from_node_id"]).union(df["to_node_id"]))
         node2id = {key: idx for idx, key in enumerate(nodes)}
         neg_test_df = test_df.copy().reset_index(drop=True)
         neg_test_df["label"] = 0
+        neg_toids = np.zeros(len(neg_test_df), dtype=np.int32)
         for index, row in enumerate(test_df.itertuples()):
             pos_idx = node2id[row.to_node_id]
             # swap the positive index with the last element
             nodes[-1], nodes[pos_idx] = nodes[pos_idx], nodes[-1]
             neg_idx = np.random.choice(len(nodes) - 1)
-            neg_test_df.loc[index, "to_node_id"] = nodes[neg_idx]
+            neg_toids[index] = nodes[neg_idx]
+            # neg_test_df.loc[index, "to_node_id"] = nodes[neg_idx]
             # swap the positive index with the last element
             nodes[-1], nodes[pos_idx] = nodes[pos_idx], nodes[-1]
-        test_df.append(neg_test_df, ignore_index=True)
+        neg_test_df["to_node_id"] = neg_toids
+        test_df = test_df.append(neg_test_df, ignore_index=True)
         test_df = test_df.sort_values(by="timestamp")
         train_df.to_csv("{}/train_data/{}".format(store_dir, name), index=None)
         test_df.to_csv("{}/test_data/{}".format(store_dir, name), index=None)
+        end = time.time()
+        print("test edges: {} time: {:.2f} seconds".format(len(test_df), end - start))
     pass
 
 
-def iterate_datasets():
-    pass
+def iterate_datasets(project_dir="/nfs/zty/Graph/", method="node2vec"):
+    fname = os.listdir(os.path.join(project_dir, "train_data"))
+    fpath = [os.path.join(project_dir, "train_data/{}".format(f)) for f in fname]
+    lines = [len(open(f, "r").readlines()) for f in fpath]
+    # sort the dataset by train data size
+    forder = [f for l, f in sorted(zip(lines, fname))]
+    fpath = [os.path.join(project_dir, "train_data/{}".format(f)) for f in forder]
+    for name, file in zip(fname, fpath):
+        df = pd.read_csv(file)
+        if method == "node2vec":
+            run_node2vec(df, name[:-4])
 
 
 def load_embeddings():
@@ -118,8 +139,11 @@ def predict(X, y):
 
 if __name__ == "__main__":
     # data_stats()
-    train_test_split()
-    pass
-        
+    # train_test_split()
+    # df = pd.read_csv("../../train_data/ia-contact.csv")
+    # run_node2vec(df, "ia-contact")
+    run_node2vec(n_jobs=25)
+    # iterate_datasets()
+    
     
         
