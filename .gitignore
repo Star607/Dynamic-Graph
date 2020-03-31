@@ -10,3 +10,4 @@ tf_op/*
 ckpt/*
 results/*
 saved_models/*
+*nohup.out

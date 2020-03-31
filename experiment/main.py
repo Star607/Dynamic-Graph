@@ -8,16 +8,21 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, roc_auc_score
 
-# import tensorflow as tf
+import argparse
 
-# flags = tf.app.flags
-# FLAGS = flags.FLAGS
+parser = argparse.ArgumentParser(description="Perform contrastive experiments.")
+parser.add_argument("--method", type=str, default="node2vec", help="Contrastive method name.")
+parser.add_argument("--n_jobs", type=int, default=16, help="Job numbers for joblib Parallel function.")
+parser.add_argument("--dataset", type=str, 
+default="all", help="Specific dataset for experiments; default is all datasets.")
+
+args = parser.parse_args()
 
 from datetime import datetime
 from collections import defaultdict 
 import time
 
-from adaptors import run_node2vec
+from adaptors import run_node2vec, run_triad, run_htne, run_tnode
 
 def data_stats(project_dir="/nfs/zty/Graph/ctdne_data/"):
     # nodes, edges, d_avg, d_max, timespan(days) 
@@ -142,7 +147,16 @@ if __name__ == "__main__":
     # train_test_split()
     # df = pd.read_csv("../../train_data/ia-contact.csv")
     # run_node2vec(df, "ia-contact")
-    run_node2vec(n_jobs=25)
+    if args.method == "node2vec":
+        run_node2vec(dataset=args.dataset, n_jobs=args.n_jobs)
+    elif args.method == "triad":
+        run_triad(dataset=args.dataset, n_jobs=args.n_jobs)
+    elif args.method == "htne":
+        run_htne(dataset=args.dataset, n_jobs=args.n_jobs)
+    elif args.method == "tnode":
+        run_tnode(dataset=args.dataset, n_jobs=args.n_jobs)
+    else:
+        raise NotImplementedError("Method {} not implemented!".format(args.method))
     # iterate_datasets()
     
     
