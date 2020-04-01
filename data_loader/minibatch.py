@@ -43,7 +43,8 @@ class TemporalEdgeBatchIterator(object):
     Adjacency list are stored in two arrays, one for neighbors, another for the corresponding timestamps.
     """
 
-    def __init__(self, edges, nodes, placeholders, batch_size=512, context_size=25, max_degree=100, neg_sample_size=25, **kwargs):
+    def __init__(self, edges, nodes, placeholders, train_edges_num, test_edges_num, 
+            batch_size=128, context_size=20, max_degree=100, neg_sample_size=1, **kwargs):
         """Nodes is padded with a dummy node: 0, neg_samples are implemented in models.
         """
         self.eps = 1e-7
@@ -91,7 +92,7 @@ class TemporalEdgeBatchIterator(object):
         self.max_degree = max_degree
         self.adj_ids, self.adj_tss, self.degrees = self.construct_adj()
         self.neg_sample_size = neg_sample_size
-        self.train_test_split()
+        self.train_test_split(train_edges_num, test_edges_num)
         self.batch_num = 0
 
     def _node_prune(self, edges, min_score=5):
@@ -154,15 +155,9 @@ class TemporalEdgeBatchIterator(object):
                 adj_tss[i, :deg[i]] = adj_tss_list[i]
         return adj_ids, adj_tss, deg
 
-    def train_test_split(self, val_ratio=0., test_ratio=0.25):
-        train_ratio = 1 - val_ratio - test_ratio
-
-        train_end_idx = int(len(self.edges) * train_ratio)
-        val_end_idx = int(len(self.edges) * val_ratio) + train_end_idx
-        # Assure the padding edge not in training set
-        self.train_idx = list(range(1, train_end_idx))
-        self.val_idx = list(range(train_end_idx, val_end_idx))
-        self.test_idx = list(range(val_end_idx, len(self.edges)))
+    def train_test_split(self, train_edges_num, test_edges_num):
+        self.train_idx = list(range(train_edges_num))
+        self.test_idx = list(range(train_edges_num, train_edges_num + test_edges_num))
 
     def neg_toids(self, batch_to, times=1):
         """Sampling negative to_nodes with respect to from_nodes
@@ -243,35 +238,37 @@ class TemporalEdgeBatchIterator(object):
         def ceil(x): return int(np.ceil(len(x) / self.batch_size))
         return ceil(self.train_idx), ceil(self.val_idx), ceil(self.test_idx)
 
-    def val_batch(self):
-        val_idx = np.random.permutation(self.val_idx)
-        batch_num = int(np.ceil(len(val_idx) / self.batch_size))
-        start_idx = 0
-        for idx in range(batch_num):
-            start_idx = idx * self.batch_size
-            end_idx = (idx + 1) * self.batch_size
-            yield self.batch_feed_dict(val_idx[start_idx: end_idx])
+    def test_batch(self, edges):
+        # don't need negative samples
+        test_idx = np.tile(np.reshape(self.test_idx, [-1, 1]))
+        test_idx = np.reshape(test_idx, [-1]) # [1, 2, 3] => [1, 1, 2, 2, 3, 3]
+        batch_num = int(np.ceil(len(edges) / self.batch_size))
+        for i in range(batch_num):
+            start_idx = batch_num * self.batch_size
+            end_idx = start_idx + batch_num
+            batch = edges.iloc[start_idx: end_idx]
+            batch_from = batch["from_node_id"].tolist()
+            batch_to = batch["to_node_id"].tolist()
+            timestamp = batch["timestamp"].tolist()
 
-    def test_batch(self):
-        test_idx = np.random.permutation(self.test_idx)
-        batch_num = int(np.ceil(len(test_idx) / self.batch_size))
-        start_idx = 0
-        for idx in range(batch_num):
-            start_idx = idx * self.batch_size
-            end_idx = (idx + 1) * self.batch_size
-            yield self.batch_feed_dict(test_idx[start_idx: end_idx])
+            batch_idx = test_idx[start_idx: end_idx]
+            context_edges = self.get_context_edges(batch_idx)
+            context_from = context_edges["from_node_id"].tolist()
+            context_to = context_edges["to_node_id"].tolist()
+            context_timestamp = context_edges["timestamp"].tolist()
 
-    def val_feed_dict(self):
-        size = self.batch_size
-        val_idx = np.random.permutation(self.val_idx)
-        val_idx = val_idx[:size]
-        return self.batch_feed_dict(val_idx)
+            feed_dict = dict()
+        
+            feed_dict.update({self.placeholders["batch_size"]: len(batch)})
+            feed_dict.update({self.placeholders["batch_from"]: batch_from})
+            feed_dict.update({self.placeholders["batch_to"]: batch_to})
+            feed_dict.update({self.placeholders["timestamp"]: timestamp})
 
-    def test_feed_dict(self):
-        size = self.batch_size
-        test_idx = np.random.permutation(self.test_idx)
-        test_idx = test_idx[:size]
-        return self.batch_feed_dict(test_idx)
+            feed_dict.update({self.placeholders["context_from"]: context_from})
+            feed_dict.update({self.placeholders["context_to"]: context_to})
+            feed_dict.update(
+                {self.placeholders["context_timestamp"]: context_timestamp})
+            yield feed_dict
 
     def shuffle(self):
         self.train_idx = np.random.permutation(self.train_idx)
