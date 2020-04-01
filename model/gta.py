@@ -34,13 +34,15 @@ def timeit(method):
     return timed
 
 
-def repeat_vector(self, vec, times):
+def repeat_vector(vec, times):
+    # input: ([1, 2, 3], times=2)
+    # output: [1, 1, 2, 2, 3, 3]
     vec = tf.reshape(vec, [-1, 1])
     vec = tf.tile(vec, [1, times])
     return tf.reshape(vec, [-1])
 
 
-def repeat_matrix(self, mat, times):
+def repeat_matrix(mat, times):
     """Repeat matrix across axis 0"""
     dim = tf.shape(mat)[1]
     mat = tf.tile(mat, [1, times])
@@ -206,13 +208,17 @@ class GraphTemporalAttention(GeneralizedModel):
         # Also for neg_samples and context_samples
         samples = [inputs]
         timemasks = [timestamp]
+        timefilters = [timestamp]
         for k in range(len(layer_infos)):
             t = len(layer_infos) - k - 1
             num_samples = layer_infos[t].num_samples
+            # filter the adjacency list according to batch timestamp
             node, tmask = self.sampler(
-                (samples[k], timemasks[k], batch_size, num_samples))
+                (samples[k], timefilters[k], batch_size, num_samples))
             samples.append(tf.reshape(node, [-1]))
             timemasks.append(tf.reshape(tmask, [-1]))
+            new_filter = repeat_vector(timestamp, layer_infos[t].num_samples)
+            timefilters.append(new_filter)
             batch_size *= num_samples
         return samples, timemasks
 
@@ -398,3 +404,108 @@ class GraphTemporalAttention(GeneralizedModel):
         else:
             raise NotImplementedError(
                 "Loss {} not implemented yet.".format(FLAGS.loss))
+
+def ModelTrainer(object):
+    def __init__(self, flags=FLAGS):
+        self.test = False
+        pass
+
+    def log_dir(self):
+        log_dir = FLAGS.base_log_dir + "{}-{}".format(FLAGS.dataset, FLAGS.method)
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            os.chmod(log_dir, 0o777)
+        return log_dir
+
+    def construct_placeholders(self):
+        # Define placeholders: (None,) means 1-D tensor
+        placeholders = {
+            "batch_from": tf.placeholder(tf.int32, shape=(None,), name="batch_from"),
+            "batch_to": tf.placeholder(tf.int32, shape=(None,), name="batch_to"),
+            "batch_neg": tf.placeholder(tf.int32, shape=(None,), name="batch_neg"),
+            "timestamp": tf.placeholder(tf.float64, shape=(None,), name="timestamp"),
+            "batch_size": tf.placeholder(tf.int32, name="batch_size"),
+            "context_from": tf.placeholder(tf.int32, shape=(None,), name="context_from"),
+            "context_to": tf.placeholder(tf.int32, shape=(None,), name="context_to"),
+            "context_timestamp": tf.placeholder(tf.float64, shape=(None,), name="timestamp"),
+        }
+        return placeholders
+
+    def config_tensorflow(self):
+        config = tf.ConfigProto(log_device_placement=False)
+        config.gpu_options.allow_growth = True
+        config.allow_soft_placement = True
+
+        # Initialize session
+        sess = tf.Session(config=config)
+        merged = tf.summary.merge_all()
+        summary_writer = tf.summary.FileWriter(log_dir(), sess.graph)
+        return merged, sess, summary_writer
+
+    def train(self):
+        print("Loading training data...")
+        edges, nodes = load_data(datadir="./ctdne_data/", dataset=FLAGS.dataset)
+        print("Done loading training data...")
+
+        placeholders = construct_placeholders()
+        batch = TemporalEdgeBatchIterator(edges, nodes, placeholders,
+                                        batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree, context_size=FLAGS.context_size)
+
+        adj_info, ts_info = batch.adj_ids, batch.adj_tss
+        if FLAGS.sampler == "mask":
+            sampler = MaskNeighborSampler(adj_info, ts_info)
+        elif FLAGS.sampler == "temporal":
+            sampler = TemporalNeighborSampler(adj_info, ts_info)
+        else:
+            raise NotImplementedError("Sampler %s not supported." % FLAGS.sampler)
+
+        layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_1, FLAGS.dim_1),
+                    SAGEInfo("node", sampler, FLAGS.samples_2, FLAGS.dim_2)]
+        ctx_layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_2, FLAGS.dim_2)]
+        model = GraphTemporalAttention(
+            placeholders, None, adj_info, ts_info, batch.degrees, layer_infos,
+            ctx_layer_infos, sampler, bipart=batch.bipartite, n_users=batch.n_users)
+
+        merged, sess, summary_writer = config_tensorflow()
+        sess.run(tf.global_variables_initializer())
+        batch_num = len(batch.train_idx) // FLAGS.batch_size
+        
+        for epoch in range(FLAGS.epochs):
+            print("Epoch %04d" % (epoch + 1))
+            batch.shuffle()
+            tot_loss = tot_acc = val_loss = val_acc = 0
+            sess.run(tf.local_variables_initializer())
+            with trange(batch_num) as batch_bar:
+                while not batch.end():
+                    batch_bar.set_description("batch %04d" % batch_num)
+                    feed_dict = batch.next_train_batch()
+                    outs = sess.run(
+                        [merged, model.opt_op, model.loss, model.acc, model.auc, model.acc_update, model.auc_update], feed_dict)
+                    tot_loss += outs[2] * feed_dict[placeholders["batch_size"]]
+                    tot_acc += outs[3] * feed_dict[placeholders["batch_size"]]
+                    loss, acc = outs[2], outs[3]
+                    if batch.batch_num % FLAGS.val_batches == 0:
+                        val_loss, val_acc = valid_batch(sess, model, batch)
+                    batch_bar.update()
+                    batch_bar.set_postfix(
+                        loss=loss, acc=acc, val_loss=val_loss, val_acc=val_acc)
+                    summary_writer.add_summary(
+                        outs[0], epoch * batch_num + batch.batch_num)
+            tot_loss /= len(batch.train_idx)
+            tot_acc /= len(batch.train_idx)
+            # print("Full train_loss %.4f train_acc %.4f" % (tot_loss, tot_acc))
+            # if epoch % FLAGS.val_epochs == 0:
+            val_loss, acc, f1, auc = valid_full(sess, model, batch, placeholders)
+            print("Full train_loss %.4f train_acc %.4f val_loss %.4f val_acc %.4f val_f1 %.4f val_auc %.4f" %(tot_loss, tot_acc, val_loss, acc, f1, auc))
+            # epoch_bar.set_postfix(loss=tot_loss, acc=tot_acc,
+                                # val_loss=val_loss, val_f1=f1, val_auc=auc)
+        print("Optimized finishied!")
+        loss, acc, f1, auc = valid_full(sess, model, batch, placeholders, mode="test")
+        write_result(loss, acc, f1, auc)
+        print("Dataset %s Test set statistics: loss %.4f acc %.4f f1 %.4f auc %.4f" % (FLAGS.dataset, loss, acc, f1, auc))
+
+    def save_models(self, sess):
+        pass
+    
+    def restore_models(self, ckpt_path):
+        pass

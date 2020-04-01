@@ -32,6 +32,25 @@ class UniformNeighborSampler(Layer):
         return adj_lists
 
 
+# class MaskNeighborSampler(Layer):
+#     """Mask edges of adjacency list later than current edge timestamp.
+#     """
+
+#     def __init__(self, adj_info, ts_info, **kwargs):
+#         super(MaskNeighborSampler, self).__init__(**kwargs)
+#         self.adj_info = tf.Variable(adj_info, trainable=False, name="adj_info")
+#         self.ts_info = tf.Variable(ts_info, trainable=False, name="ts_info")
+
+#     def _call(self, inputs):
+#         ids, tss, batch_size, num_samples = inputs
+#         adj_lists = tf.nn.embedding_lookup(self.adj_info, ids)
+#         # adj_lists = tf.transpose(tf.random_shuffle(tf.transpose(adj_lists)))
+#         ts_lists = tf.nn.embedding_lookup(self.ts_info, ids)
+#         # shape: (num_ids, max_degree) < (num_ids, 1)
+#         # expand dims according to numpy broadcast rules
+#         mask = tf.less(ts_lists, tf.expand_dims(tss, axis=1))
+#         return neighbors, tf.cast(mask, dtype=tf.float32)
+
 class MaskNeighborSampler(Layer):
     """Mask edges of adjacency list later than current edge timestamp.
     """

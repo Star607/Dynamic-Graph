@@ -20,7 +20,7 @@ flags = tf.app.flags
 FLAGS = flags.FLAGS
 
 
-def load_data(datadir="/nfs/zty/Graph/Dynamic-Graph/graph_data", dataset="CTDNE-fb-forum"):
+def load_data(datadir="/nfs/zty/Graph/Dynamic-Graph/ctdne_data", dataset="ia-contact"):
     # ensure that node_id is stored as string format
     edges = pd.read_csv("{}/{}.edges".format(datadir, dataset))
     nodes = pd.read_csv("{}/{}.nodes".format(datadir, dataset))
@@ -95,22 +95,22 @@ class TemporalEdgeBatchIterator(object):
         self.batch_num = 0
 
     def _node_prune(self, edges, min_score=5):
-        edges = edges.sort_values(by="timestamp")
-        from_id_counts = dict(edges["from_node_id"].value_counts())
-        to_id_counts = dict(edges["to_node_id"].value_counts())
-        ids = set(from_id_counts.keys()).union(set(to_id_counts.keys()))
-        id_counts = {k: from_id_counts.get(
-            k, 0) + to_id_counts.get(k, 0) for k in ids}
-        prune_ids = set(filter(lambda s: id_counts[s] < min_score, id_counts))
-        print("********Remove %d nodes less than 5-score********" %
-              len(prune_ids))
-        edges = edges[edges["from_node_id"].apply(
-            lambda s: s not in prune_ids)]
-        edges = edges[edges["to_node_id"].apply(lambda s: s not in prune_ids)]
+        # edges = edges.sort_values(by="timestamp")
+        # from_id_counts = dict(edges["from_node_id"].value_counts())
+        # to_id_counts = dict(edges["to_node_id"].value_counts())
+        # ids = set(from_id_counts.keys()).union(set(to_id_counts.keys()))
+        # id_counts = {k: from_id_counts.get(
+        #     k, 0) + to_id_counts.get(k, 0) for k in ids}
+        # prune_ids = set(filter(lambda s: id_counts[s] < min_score, id_counts))
+        # print("********Remove %d nodes less than 5-score********" %
+        #       len(prune_ids))
+        # edges = edges[edges["from_node_id"].apply(
+        #     lambda s: s not in prune_ids)]
+        # edges = edges[edges["to_node_id"].apply(lambda s: s not in prune_ids)]
 
-        reserve_ids = ids - prune_ids
-        print("********Finally, we get %d edges and %d nodes********" %
-              (len(edges), len(reserve_ids)))
+        # reserve_ids = ids - prune_ids
+        # print("********Finally, we get %d edges and %d nodes********" %
+        #       (len(edges), len(reserve_ids)))
         return edges
 
     def construct_adj(self):
@@ -133,24 +133,28 @@ class TemporalEdgeBatchIterator(object):
             adj_ids_list[to_id].append(from_id)
             adj_tss_list[to_id].append(ts)
 
-        adj_ids = np.zeros((len(self.id2idx), self.max_degree), dtype=np.int32)
-        adj_tss = np.zeros(
-            (len(self.id2idx), self.max_degree), dtype=np.float64)
+        shape = (len(self.id2idx), self.max_degree)
+        adj_ids = np.zeros(shape, dtype=np.int32)
+        # adj_tss = np.full(shape, dtype=np.float64)
+        adj_tss = np.full(shape, np.inf)
         deg = np.zeros(len(self.id2idx), dtype=np.int64)
         for i in range(len(self.id2idx)):
             deg[i] = len(adj_ids_list[i])
             if deg[i] == 0:
                 continue
             replace = deg[i] < self.max_degree
-            # print(deg[i])
-            indices = sorted(np.random.choice(
-                deg[i], self.max_degree, replace=replace))
-            # to-do: padding with zero?
-            adj_ids[i, :] = np.array(adj_ids_list[i])[indices]
-            adj_tss[i, :] = np.array(adj_tss_list[i])[indices]
+            if deg[i] > self.max_degree:
+                indices = sorted(np.random.choice(
+                    deg[i], self.max_degree, replace=replace))
+                # to-do: padding with zero?
+                adj_ids[i, :] = np.array(adj_ids_list[i])[indices]
+                adj_tss[i, :] = np.array(adj_tss_list[i])[indices]
+            else:
+                adj_ids[i, :deg[i]] = adj_ids_list[i]
+                adj_tss[i, :deg[i]] = adj_tss_list[i]
         return adj_ids, adj_tss, deg
 
-    def train_test_split(self, val_ratio=0.1, test_ratio=0.2):
+    def train_test_split(self, val_ratio=0., test_ratio=0.25):
         train_ratio = 1 - val_ratio - test_ratio
 
         train_end_idx = int(len(self.edges) * train_ratio)
