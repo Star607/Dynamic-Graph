@@ -240,12 +240,12 @@ class TemporalEdgeBatchIterator(object):
 
     def test_batch(self, edges):
         # don't need negative samples
-        test_idx = np.tile(np.reshape(self.test_idx, [-1, 1]))
+        test_idx = np.tile(np.reshape(self.test_idx, [-1, 1]), 2)
         test_idx = np.reshape(test_idx, [-1]) # [1, 2, 3] => [1, 1, 2, 2, 3, 3]
         batch_num = int(np.ceil(len(edges) / self.batch_size))
         for i in range(batch_num):
-            start_idx = batch_num * self.batch_size
-            end_idx = start_idx + batch_num
+            start_idx = i * self.batch_size
+            end_idx = start_idx + self.batch_size
             batch = edges.iloc[start_idx: end_idx]
             batch_from = batch["from_node_id"].tolist()
             batch_to = batch["to_node_id"].tolist()
@@ -262,6 +262,7 @@ class TemporalEdgeBatchIterator(object):
             feed_dict.update({self.placeholders["batch_size"]: len(batch)})
             feed_dict.update({self.placeholders["batch_from"]: batch_from})
             feed_dict.update({self.placeholders["batch_to"]: batch_to})
+            feed_dict.update({self.placeholders["batch_neg"]: batch_to})
             feed_dict.update({self.placeholders["timestamp"]: timestamp})
 
             feed_dict.update({self.placeholders["context_from"]: context_from})

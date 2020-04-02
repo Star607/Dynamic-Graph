@@ -1,5 +1,6 @@
 import csv
 import os
+import pandas as pd
 import time
 import numpy as np
 import tensorflow as tf
@@ -15,7 +16,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('dataset', 'ia-contact', 'experiment dataset')
 flags.DEFINE_string('method', 'GTA', 'experiment method')
 flags.DEFINE_string('sampler', 'mask', 'neighbor sampler')
-flags.DEFINE_boolean('use_context', True, 'use temporal context mechanism')
+flags.DEFINE_boolean('use_context', False, 'use temporal context mechanism')
 flags.DEFINE_string('loss', 'xent', 'loss function')
 flags.DEFINE_float('learning_rate', 0.0001, 'initial learning rate')
 flags.DEFINE_integer('epochs', 1, 'number of epochs to train')
@@ -43,7 +44,7 @@ flags.DEFINE_string('base_log_dir', 'log/',
 flags.DEFINE_boolean('pretrain', False, 'if use last training models')
 flags.DEFINE_string('save_dir', 'saved_models/', 'directory for saving models')
 flags.DEFINE_string('result_dir', 'results/', 'directory for saving results')
-flags.DEFINE_integer('gpu', 0, "which gpu to use.")
+flags.DEFINE_integer('gpu', 1, "which gpu to use.")
 flags.DEFINE_integer('print_every', 50, "How often to print training info.")
 
 os.environ["CUDA_VISIBLE_DEVICES"] = str(FLAGS.gpu)
@@ -60,13 +61,14 @@ def write_result(label, preds, params):
         f.close()
         os.chmod(res_path, 0o777)
     with open(res_path, 'a') as f:
-        # result_str = "{},{},{:.4f},{:.4f},{:.4f}".format(FLAGS.method, FLAGS.dataset, acc, f1, auc)
+        result_str = "{},{},{:.4f},{:.4f},{:.4f}".format(FLAGS.method, FLAGS.dataset, acc, f1, auc)
         # params = {"epochs":FLAGS.epochs, "sampler":FLAGS.sampler, "learning_rate":FLAGS.learning_rate, 
         #           "dropout":FLAGS.dropout, "weight_decay":FLAGS.weight_decay,
         #           "use_context":FLAGS.use_context, "context_size":FLAGS.context_size}
         params_str = ",".join(["{}={}".format(k, v) for k, v in params.items()])
         params_str = "\"{}\"".format(params_str)
         row = result_str + "," + params_str + "\r\n"
+        print("{}-{}: {:.3f}, {:.3f}, {:.3f}".format(FLAGS.dataset, FLAGS.method, acc, f1, auc))
         f.write(row)
 
 from data_loader.minibatch import load_data, TemporalEdgeBatchIterator
@@ -86,11 +88,10 @@ def main(argv=None):
     for epoch in range(FLAGS.epochs):
         trainer.train(epoch=epoch)
         # summary_writer.add_summary(
-                    outs[0], epoch * batch_num + batch.batch_num)
-    trainer.save_models()
+                    # outs[0], epoch * batch_num + batch.batch_num)
     y = trainer.test(test_edges) 
     write_result(test_edges["label"], y, trainer.params)
-    print("Done test for {} edges.".format(len(edges)))
+    trainer.save_models()
 
 if __name__ == "__main__":
     tf.app.run()

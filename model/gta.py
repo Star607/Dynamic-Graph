@@ -217,7 +217,7 @@ class GraphTemporalAttention(GeneralizedModel):
                 (samples[k], timefilters[k], batch_size, num_samples))
             samples.append(tf.reshape(node, [-1]))
             timemasks.append(tf.reshape(tmask, [-1]))
-            new_filter = repeat_vector(timestamp, layer_infos[t].num_samples)
+            new_filter = repeat_vector(timefilters[k], num_samples)
             timefilters.append(new_filter)
             batch_size *= num_samples
         return samples, timemasks
@@ -289,6 +289,7 @@ class GraphTemporalAttention(GeneralizedModel):
         forward_batches = [self.batch_from, self.batch_to, self.batch_neg]
         samples_from, samples_to, samples_neg = [self.sample(
             batch, self.timestamp, self.layer_infos, FLAGS.batch_size)[0] for batch in forward_batches]
+        self.samples_from = samples_from
 
         forward_aggs = self.config_aggregators(self.layer_infos, self.dims)
         num_samples = [layer.num_samples for layer in self.layer_infos]

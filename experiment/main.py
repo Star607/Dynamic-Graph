@@ -15,6 +15,8 @@ parser.add_argument("--method", type=str, default="node2vec", help="Contrastive 
 parser.add_argument("--n_jobs", type=int, default=16, help="Job numbers for joblib Parallel function.")
 parser.add_argument("--dataset", type=str, 
 default="all", help="Specific dataset for experiments; default is all datasets.")
+parser.add_argument("--start", type=int, default=0, help="Datset start index.")
+parser.add_argument("--end", type=int, default=3, help="Datset end index.")
 
 args = parser.parse_args()
 
@@ -22,7 +24,7 @@ from datetime import datetime
 from collections import defaultdict 
 import time
 
-from adaptors import run_node2vec, run_triad, run_htne, run_tnode
+from experiment.adaptors import run_node2vec, run_triad, run_htne, run_tnode, run_gta
 
 def data_stats(project_dir="/nfs/zty/Graph/ctdne_data/"):
     # nodes, edges, d_avg, d_max, timespan(days) 
@@ -155,6 +157,8 @@ if __name__ == "__main__":
         run_htne(dataset=args.dataset, n_jobs=args.n_jobs)
     elif args.method == "tnode":
         run_tnode(dataset=args.dataset, n_jobs=args.n_jobs)
+    elif args.method == "gta":
+        run_gta(dataset=args.dataset, n_jobs=1, start=args.start, end=args.end)
     else:
         raise NotImplementedError("Method {} not implemented!".format(args.method))
     # iterate_datasets()

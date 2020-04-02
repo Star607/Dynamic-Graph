@@ -145,3 +145,40 @@ def run_tnode(dataset="all", project_dir="/nfs/zty/Graph/5-tNodeEmbed/", n_jobs=
     os.chdir(project_dir)
     print("Preprocessing finished.") 
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
+
+def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=1, start=0, end=3):
+    fname, _ = iterate_datasets(dataset=dataset)
+    fname = [name[:-4] for name in fname[start:end]]
+    os.chdir(project_dir)
+    for name in fname:
+        path = "{}/ctdne_data/{}".format(project_dir, name)
+        if not (os.path.exists(path+".edges") and os.path.exists(path+".nodes")):
+            train_edges = pd.read_csv("{}/../train_data/{}.csv".format(project_dir, name))
+            test_edges = pd.read_csv("{}/../test_data/{}.csv".format(project_dir, name))
+            pos_edges = test_edges[test_edges["label"] == 1].drop("label", axis=1)
+            edges = pd.concat([train_edges, pos_edges])
+            edges.to_csv("{}.edges".format(path), index=None)
+
+            edges = pd.concat([train_edges, test_edges])
+            from_nodes = edges['from_node_id'].tolist()
+            to_nodes = edges['to_node_id'].tolist()
+            nodes_id = sorted(set(from_nodes + to_nodes))
+            nodes = pd.DataFrame(columns=['node_id', 'id_map', 'role', 'label'])
+            nodes['node_id'] = nodes_id
+            nodes['id_map'] = list(range(1, len(nodes_id) + 1))
+            nodes['role'] = 0
+            nodes['label'] = 0
+            nodes.to_csv("{}.nodes".format(path), index=None)
+            # nodes.to_csv('{}/{}-{}.nodes'.format(store_dir,
+                                                # project, name), index=None)
+
+    command = "python main.py --dataset {dataset} --epochs 50 --dropout 0.2 --weight_decay 1e-5 --learning_rate=0.0001"
+    commands = []
+    comps = []
+    for name in fname:
+        cmd = command.format(dataset=name)
+        commands.append(cmd + " --use_context")
+        comps.append(cmd)
+    print("Preprocessing finished.")
+    Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
+    Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in comps)

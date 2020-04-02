@@ -5,6 +5,8 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow.layers import conv1d
 from collections import namedtuple
+from tqdm import trange
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 from model.aggregators import *
 from model.inits import glorot, zeros
@@ -20,7 +22,7 @@ flags = tf.app.flags
 FLAGS = flags.FLAGS
 
 
-def ModelTrainer(object):
+class ModelTrainer():
     def __init__(self, edges, nodes, train_edges, test_edges):
         self.placeholders = self.construct_placeholders()
         self.nodes = nodes
@@ -52,6 +54,7 @@ def ModelTrainer(object):
             "context_from": tf.placeholder(tf.int32, shape=(None,), name="context_from"),
             "context_to": tf.placeholder(tf.int32, shape=(None,), name="context_to"),
             "context_timestamp": tf.placeholder(tf.float64, shape=(None,), name="timestamp"),
+            "dropout": tf.placeholder_with_default(0., shape=(), name="dropout")
         }
         return placeholders
 
@@ -63,13 +66,13 @@ def ModelTrainer(object):
         # Initialize session
         sess = tf.Session(config=config)
         merged = tf.summary.merge_all()
-        summary_writer = tf.summary.FileWriter(log_dir(), sess.graph)
+        summary_writer = tf.summary.FileWriter(self.log_dir(), sess.graph)
         return sess, merged, summary_writer
 
     def preprocess(self, edges, nodes, train_edges, test_edges):
-        self.sess, self.merged, self.summary_writer = self.config_tensorflow()
 
         # placeholders = construct_placeholders()
+        # test_edges are both positive and negative samples
         self.batch = TemporalEdgeBatchIterator(edges, nodes, self.placeholders, 
                                         len(train_edges), len(test_edges) // 2,
                                         batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree, context_size=FLAGS.context_size)
@@ -89,28 +92,30 @@ def ModelTrainer(object):
             self.placeholders, None, adj_info, ts_info, self.batch.degrees, layer_infos,
             ctx_layer_infos, sampler, bipart=self.batch.bipartite, n_users=self.batch.n_users)
 
+        self.sess, self.merged, self.summary_writer = self.config_tensorflow()
         self.sess.run(tf.global_variables_initializer())
         self.sess.run(tf.local_variables_initializer())
 
     def train(self, epoch=0):
         self.batch.shuffle()
         tot_loss = tot_acc = 0
+        placeholders = self.placeholders
+        batch = self.batch
         batch_num = len(self.batch.train_idx) // FLAGS.batch_size
-        with trange(batch_num) as batch_bar:
+        with trange(batch_num, disable=True) as batch_bar:
             while not batch.end():
                 batch_bar.set_description("batch %04d" % batch_num)
                 feed_dict = batch.next_train_batch()
                 feed_dict.update({placeholders['dropout']: FLAGS.dropout})
-                outs = sess.run(
-                    [self.merged, self.model.opt_op, self.model.loss, self.model.acc, self.model.auc], feed_dict)
+                outs = self.sess.run(
+                    [self.merged, self.model.opt_op, self.model.loss, self.model.acc, self.model.auc], feed_dict=feed_dict)
                 tot_loss += outs[2] * feed_dict[placeholders["batch_size"]]
                 tot_acc += outs[3] * feed_dict[placeholders["batch_size"]]
                 loss, acc = outs[2], outs[3]
                
                 batch_bar.update()
-                batch_bar.set_postfix(
-                    loss=loss, acc=acc, val_loss=val_loss, val_acc=val_acc)
-                summary_writer.add_summary(
+                batch_bar.set_postfix(loss=loss, acc=acc)
+                self.summary_writer.add_summary(
                     outs[0], epoch * batch_num + self.batch.batch_num)
 
     def test(self, edges):
@@ -127,16 +132,23 @@ def ModelTrainer(object):
         batch_num = len(edges) // (FLAGS.batch_size * 2)
         preds = []
         for feed_dict in self.batch.test_batch(edges):
-            y = self.sess.run([self.model.pred_op], feed_dict)
-            preds.extend(y)
-        return preds
+            # # print(feed_dict)
+            # break
+            outs = self.sess.run([self.model.pred_op, self.model.loss], feed_dict=feed_dict)
+            # outs = self.sess.run([self.model.samples_from], feed_dict=feed_dict)
+            # print("samples_from", outs[0])
+            # print("loss: %.2f" % outs[1])
+            preds.extend(outs[0])
+        return np.array(preds)
 
     def save_models(self):
         save_path = "saved_models/{dataset}/{use_context}-{dropout:.2f}.ckpt".format(dataset=FLAGS.dataset, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
         if not os.path.exists("saved_models/{}".format(FLAGS.dataset)):
             os.makedirs("saved_models/{}".format(FLAGS.dataset))
-        saver = tf.train.Saver()
-        saver.save(self.sess, save_path, max_to_keep=1)
+            os.chmod("saved_models/{dataset}".format(dataset=FLAGS.dataset), 0o777)
+        saver = tf.train.Saver(max_to_keep=1)
+        saver.save(self.sess, save_path)
+        os.chmod(save_path, 0o777)
     
     def restore_models(self):
         load_path = "saved_models/{dataset}/{use_context}-{dropout:.2f}.ckpt".format(dataset=FLAGS.dataset, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
