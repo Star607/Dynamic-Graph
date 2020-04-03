@@ -8,6 +8,7 @@ log/*
 cuda_example/*
 tf_op/*
 ckpt/*
+comp_results/*
 results/*
 saved_models/*
 *nohup.out

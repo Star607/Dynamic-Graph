@@ -68,8 +68,26 @@ def to_dataframe(fname=["ia-contact.edges"]):
     #     df.to_csv("{}/{}.csv".format(project_dir, name), index=None)
     pass
 
+def negative_sampling(df, nodes, node2id):
+    df["label"] = 1
+    neg_df = df.copy().reset_index(drop=True)
+    neg_df["label"] = 0
+    neg_toids = np.zeros(len(df), dtype=np.int32)
+    for index, row in enumerate(df.itertuples()):
+        pos_idx = node2id[row.to_node_id]
+        # swap the positive index with the last element
+        nodes[-1], nodes[pos_idx] = nodes[pos_idx], nodes[-1]
+        neg_idx = np.random.choice(len(nodes) - 1)
+        neg_toids[index] = nodes[neg_idx]
+        # neg_test_df.loc[index, "to_node_id"] = nodes[neg_idx]
+        # swap the positive index with the last element
+        nodes[-1], nodes[pos_idx] = nodes[pos_idx], nodes[-1]
+    neg_df["to_node_id"] = neg_toids
+    df = df.append(neg_df, ignore_index=True)
+    df = df.sort_values(by="timestamp")
+    return df
 
-def train_test_split(train_ratio=0.75, project_dir="/nfs/zty/Graph/ctdne_data/", store_dir="/nfs/zty/Graph/Dynamic-Graph/"):
+def train_test_split(train_ratio=0.75, project_dir="/nfs/zty/Graph/ctdne_data/", store_dir="/nfs/zty/Graph/"):
     # nodes, edges, d_avg, d_max, timespan(days) 
     fname = [f for f in os.listdir(project_dir) if f.endswith("csv")]
     fname = sorted(fname)
@@ -84,7 +102,6 @@ def train_test_split(train_ratio=0.75, project_dir="/nfs/zty/Graph/ctdne_data/",
         # df.loc contains both start and stop
         train_df = df.iloc[:train_end_idx]#.reset_index(drop=True)
         test_df = df.iloc[train_end_idx:].reset_index(drop=True)
-        test_df["label"] = 1
         
         train_nodes = set(train_df["from_node_id"]).union(train_df["to_node_id"])
         test_nodes = set(test_df["from_node_id"]).union(test_df["to_node_id"])
@@ -96,23 +113,11 @@ def train_test_split(train_ratio=0.75, project_dir="/nfs/zty/Graph/ctdne_data/",
         # remove those edges containing unseen nodes
         test_df = test_df[np.logical_not(edges)]
 
-        nodes = list(set(df["from_node_id"]).union(df["to_node_id"]))
+        nodes = list(train_nodes)
         node2id = {key: idx for idx, key in enumerate(nodes)}
-        neg_test_df = test_df.copy().reset_index(drop=True)
-        neg_test_df["label"] = 0
-        neg_toids = np.zeros(len(neg_test_df), dtype=np.int32)
-        for index, row in enumerate(test_df.itertuples()):
-            pos_idx = node2id[row.to_node_id]
-            # swap the positive index with the last element
-            nodes[-1], nodes[pos_idx] = nodes[pos_idx], nodes[-1]
-            neg_idx = np.random.choice(len(nodes) - 1)
-            neg_toids[index] = nodes[neg_idx]
-            # neg_test_df.loc[index, "to_node_id"] = nodes[neg_idx]
-            # swap the positive index with the last element
-            nodes[-1], nodes[pos_idx] = nodes[pos_idx], nodes[-1]
-        neg_test_df["to_node_id"] = neg_toids
-        test_df = test_df.append(neg_test_df, ignore_index=True)
-        test_df = test_df.sort_values(by="timestamp")
+        train_df = negative_sampling(train_df, nodes, node2id)
+        test_df = negative_sampling(test_df, nodes, node2id) 
+
         train_df.to_csv("{}/train_data/{}".format(store_dir, name), index=None)
         test_df.to_csv("{}/test_data/{}".format(store_dir, name), index=None)
         end = time.time()
@@ -146,21 +151,21 @@ def predict(X, y):
 
 if __name__ == "__main__":
     # data_stats()
-    # train_test_split()
+    train_test_split()
     # df = pd.read_csv("../../train_data/ia-contact.csv")
     # run_node2vec(df, "ia-contact")
-    if args.method == "node2vec":
-        run_node2vec(dataset=args.dataset, n_jobs=args.n_jobs)
-    elif args.method == "triad":
-        run_triad(dataset=args.dataset, n_jobs=args.n_jobs)
-    elif args.method == "htne":
-        run_htne(dataset=args.dataset, n_jobs=args.n_jobs)
-    elif args.method == "tnode":
-        run_tnode(dataset=args.dataset, n_jobs=args.n_jobs)
-    elif args.method == "gta":
-        run_gta(dataset=args.dataset, n_jobs=1, start=args.start, end=args.end)
-    else:
-        raise NotImplementedError("Method {} not implemented!".format(args.method))
+    # if args.method == "node2vec":
+    #     run_node2vec(dataset=args.dataset, n_jobs=args.n_jobs)
+    # elif args.method == "triad":
+    #     run_triad(dataset=args.dataset, n_jobs=args.n_jobs)
+    # elif args.method == "htne":
+    #     run_htne(dataset=args.dataset, n_jobs=args.n_jobs)
+    # elif args.method == "tnode":
+    #     run_tnode(dataset=args.dataset, n_jobs=args.n_jobs)
+    # elif args.method == "gta":
+    #     run_gta(dataset=args.dataset, n_jobs=1, start=args.start, end=args.end)
+    # else:
+    #     raise NotImplementedError("Method {} not implemented!".format(args.method))
     # iterate_datasets()
     
     

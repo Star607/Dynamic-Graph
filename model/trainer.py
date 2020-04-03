@@ -148,7 +148,7 @@ class ModelTrainer():
             os.chmod("saved_models/{dataset}".format(dataset=FLAGS.dataset), 0o777)
         saver = tf.train.Saver(max_to_keep=1)
         saver.save(self.sess, save_path)
-        os.chmod(save_path, 0o777)
+        #os.chmod(save_path, 0o777)
     
     def restore_models(self):
         load_path = "saved_models/{dataset}/{use_context}-{dropout:.2f}.ckpt".format(dataset=FLAGS.dataset, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
