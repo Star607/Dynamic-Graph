@@ -321,9 +321,12 @@ class GraphTemporalAttention(GeneralizedModel):
             dim_mult = 2 if self.concat else 1
             att_agg = AttentionAggregator(
                 dim_mult * self.dims[-1], dim_mult * self.dims[-1])
-            self.output_from = att_agg((self.embed_from, self.context_embed))
-            self.output_to = att_agg((self.embed_to, self.context_embed))
-            self.output_neg = att_agg((self.embed_neg, self.context_embed))
+            self.output_from = self.embed_from + \
+                att_agg((self.embed_from, self.context_embed))
+            self.output_to = self.embed_to + \
+                att_agg((self.embed_to, self.context_embed))
+            self.output_neg = self.embed_neg + \
+                att_agg((self.embed_neg, self.context_embed))
         else:
             self.output_from = self.embed_from
             self.output_to = self.embed_to
