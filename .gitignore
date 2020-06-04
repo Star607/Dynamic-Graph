@@ -1,3 +1,4 @@
+.nfs*
 .idea/*
 .vscode/*
 */__pycache__/*
@@ -11,4 +12,4 @@ ckpt/*
 comp_results/*
 results/*
 saved_models/*
-*nohup.out
+*.out

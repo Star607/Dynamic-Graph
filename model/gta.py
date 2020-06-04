@@ -245,6 +245,7 @@ class GraphTemporalAttention(GeneralizedModel):
                 neigh_dims = [batch_size * support_sizes[hop],
                               num_samples[hop],
                               dim_mult * dims[layer]]
+                # print("layer %d hop %d" % (layer, hop), neigh_dims)
                 h = agg((hidden[hop], tf.reshape(hidden[hop+1], neigh_dims)))
                 next_hidden.append(h)
             hidden = next_hidden

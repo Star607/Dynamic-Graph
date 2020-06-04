@@ -47,7 +47,7 @@ import os
 import pandas as pd
 
 
-def to_csv(project='', data_dir='/nfs/zty/Graph/graph_data/'):
+def to_csv(project='', data_dir='/nfs/zty/Graph/ctdne_data/'):
     '''
     Five kinds of datasets from different resources are transformed into a unifed graph format: CTDNE, NEOTG, JODIE, NGCF, Aminer
     '''
@@ -55,12 +55,12 @@ def to_csv(project='', data_dir='/nfs/zty/Graph/graph_data/'):
         raise NotImplementedError(
             "{} dataset is not supported.".format(project))
     project_func, project_name = dirmap[project]
-    project_dir = data_dir + project_name + '/'
-    project_func(project_dir, '../graph_data/', project)
+    # project_dir = data_dir + project_name + '/'
+    project_func(data_dir, '../ctdne_data/', project)
 
 
 def ctdne_transf(project_dir, store_dir, project):
-    fname = [f for f in os.listdir(project_dir) if f.endswith('.edges')]
+    fname = [f for f in os.listdir(project_dir) if f.endswith('.csv')]
     files = [project_dir + f for f in fname]
     header = ['from_node_id', 'to_node_id', 'timestamp']
     header2 = ['from_node_id', 'to_node_id', 'state_label', 'timestamp']
@@ -68,17 +68,17 @@ def ctdne_transf(project_dir, store_dir, project):
         if name.find('.') != -1:
             name = name[:name.find('.')]
         print('*****{}*****'.format(name))
-        df = pd.read_csv(f, header=None)
+        df = pd.read_csv(f)
         if len(df.columns) == 3:
             df.columns = header
         else:
             df.columns = header2
 
-        edges = pd.DataFrame(columns=edges_cols)
-        edges[header] = df[header]
-        edges['state_label'] = 0
-        edges.to_csv('{}/{}-{}.edges'.format(store_dir,
-                                             project, name), index=None)
+        # edges = pd.DataFrame(columns=edges_cols)
+        # edges[header] = df[header]
+        # edges['state_label'] = 0
+        # edges.to_csv('{}/{}.edges'.format(store_dir,
+        #                                      name), index=None)
 
         from_nodes = df['from_node_id'].tolist()
         to_nodes = df['to_node_id'].tolist()
@@ -88,8 +88,7 @@ def ctdne_transf(project_dir, store_dir, project):
         nodes['id_map'] = list(range(1, len(nodes_id) + 1))
         nodes['role'] = 0
         nodes['label'] = 0
-        nodes.to_csv('{}/{}-{}.nodes'.format(store_dir,
-                                             project, name), index=None)
+        nodes.to_csv('{}/{}.nodes'.format(store_dir, name), index=None)
 
 
 def neotg_transf(project_dir, store_dir, project):
@@ -180,5 +179,5 @@ nodes_cols = ['node_id', 'id_map', 'role', 'label']
 
 if __name__ == '__main__':
     to_csv('CTDNE')
-    to_csv('NEOTG')
+    # to_csv('NEOTG')
     # to_csv('JODIE')

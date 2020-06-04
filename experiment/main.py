@@ -2,6 +2,10 @@
 classify if the edge exists. For those end2end models, we abstract a predict 
 operation to provide a probability for existence of the edge.
 """
+from collections import defaultdict
+from experiment.adaptors import run_node2vec, run_triad, run_htne, run_tnode, run_gta
+import time
+from datetime import datetime
 import os
 import numpy as np
 import pandas as pd
@@ -10,24 +14,22 @@ from sklearn.metrics import f1_score, roc_auc_score
 
 import argparse
 
-parser = argparse.ArgumentParser(description="Perform contrastive experiments.")
-parser.add_argument("--method", type=str, default="node2vec", help="Contrastive method name.")
-parser.add_argument("--n_jobs", type=int, default=16, help="Job numbers for joblib Parallel function.")
-parser.add_argument("--dataset", type=str, 
-default="all", help="Specific dataset for experiments; default is all datasets.")
+parser = argparse.ArgumentParser(
+    description="Perform contrastive experiments.")
+parser.add_argument("--method", type=str, default="node2vec",
+                    help="Contrastive method name.")
+parser.add_argument("--n_jobs", type=int, default=16,
+                    help="Job numbers for joblib Parallel function.")
+parser.add_argument("--dataset", type=str,
+                    default="all", help="Specific dataset for experiments; default is all datasets.")
 parser.add_argument("--start", type=int, default=0, help="Datset start index.")
-parser.add_argument("--end", type=int, default=3, help="Datset end index.")
+parser.add_argument("--end", type=int, default=4, help="Datset end index.")
 
 args = parser.parse_args()
 
-from datetime import datetime
-from collections import defaultdict 
-import time
-
-from experiment.adaptors import run_node2vec, run_triad, run_htne, run_tnode, run_gta
 
 def data_stats(project_dir="/nfs/zty/Graph/ctdne_data/"):
-    # nodes, edges, d_avg, d_max, timespan(days) 
+    # nodes, edges, d_avg, d_max, timespan(days)
     fname = [f for f in os.listdir(project_dir) if f.endswith("csv")]
     fname = sorted(fname)
     fpath = [project_dir + f for f in fname]
@@ -43,7 +45,9 @@ def data_stats(project_dir="/nfs/zty/Graph/ctdne_data/"):
         begin = datetime.fromtimestamp(min(df["timestamp"]))
         end = datetime.fromtimestamp(max(df["timestamp"]))
         delta = (end - begin).total_seconds() / 86400
-        print("nodes:{} edges:{} d_max:{} d_avg:{:.2f} timestamps:{:.2f}".format(len(nodes), len(df), max(degrees), len(df)/len(nodes), delta))
+        print("nodes:{} edges:{} d_max:{} d_avg:{:.2f} timestamps:{:.2f}".format(
+            len(nodes), len(df), max(degrees), len(df)/len(nodes), delta))
+
 
 def to_dataframe(fname=["ia-contact.edges"]):
     # project_dir = "../../ctdne_data/"
@@ -68,6 +72,7 @@ def to_dataframe(fname=["ia-contact.edges"]):
     #     df.to_csv("{}/{}.csv".format(project_dir, name), index=None)
     pass
 
+
 def negative_sampling(df, nodes, node2id):
     df["label"] = 1
     neg_df = df.copy().reset_index(drop=True)
@@ -87,8 +92,9 @@ def negative_sampling(df, nodes, node2id):
     df = df.sort_values(by="timestamp")
     return df
 
+
 def train_test_split(train_ratio=0.75, project_dir="/nfs/zty/Graph/ctdne_data/", store_dir="/nfs/zty/Graph/"):
-    # nodes, edges, d_avg, d_max, timespan(days) 
+    # nodes, edges, d_avg, d_max, timespan(days)
     fname = [f for f in os.listdir(project_dir) if f.endswith("csv")]
     fname = sorted(fname)
     fpath = [project_dir + f for f in fname]
@@ -100,38 +106,41 @@ def train_test_split(train_ratio=0.75, project_dir="/nfs/zty/Graph/ctdne_data/",
         df = df.sort_values(by="timestamp").reset_index(drop=True)
         train_end_idx = int(len(df) * train_ratio)
         # df.loc contains both start and stop
-        train_df = df.iloc[:train_end_idx]#.reset_index(drop=True)
+        train_df = df.iloc[:train_end_idx]  # .reset_index(drop=True)
         test_df = df.iloc[train_end_idx:].reset_index(drop=True)
-        
-        train_nodes = set(train_df["from_node_id"]).union(train_df["to_node_id"])
+        train_nodes = set(train_df["from_node_id"]).union(
+            train_df["to_node_id"])
         test_nodes = set(test_df["from_node_id"]).union(test_df["to_node_id"])
         unseen_nodes = test_nodes - train_nodes
         from_edges = test_df["from_node_id"].apply(lambda x: x in unseen_nodes)
         to_edges = test_df["to_node_id"].apply(lambda x: x in unseen_nodes)
         edges = np.logical_or(from_edges, to_edges)
-        print("unseen {} nodes, {} edges in test set".format(len(unseen_nodes), sum(edges)))
+        print("unseen {} nodes, {} edges in test set".format(
+            len(unseen_nodes), sum(edges)))
         # remove those edges containing unseen nodes
         test_df = test_df[np.logical_not(edges)]
-
         nodes = list(train_nodes)
         node2id = {key: idx for idx, key in enumerate(nodes)}
         train_df = negative_sampling(train_df, nodes, node2id)
-        test_df = negative_sampling(test_df, nodes, node2id) 
+        test_df = negative_sampling(test_df, nodes, node2id)
 
-        train_df.to_csv("{}/train_data/{}".format(store_dir, name), index=None)
-        test_df.to_csv("{}/test_data/{}".format(store_dir, name), index=None)
+        # train_df.to_csv("{}/train_data/{}".format(store_dir, name), index=None)
+        # test_df.to_csv("{}/test_data/{}".format(store_dir, name), index=None)
         end = time.time()
-        print("test edges: {} time: {:.2f} seconds".format(len(test_df), end - start))
+        print("test edges: {} time: {:.2f} seconds".format(
+            len(test_df), end - start))
     pass
 
 
 def iterate_datasets(project_dir="/nfs/zty/Graph/", method="node2vec"):
     fname = os.listdir(os.path.join(project_dir, "train_data"))
-    fpath = [os.path.join(project_dir, "train_data/{}".format(f)) for f in fname]
+    fpath = [os.path.join(project_dir, "train_data/{}".format(f))
+             for f in fname]
     lines = [len(open(f, "r").readlines()) for f in fpath]
     # sort the dataset by train data size
     forder = [f for l, f in sorted(zip(lines, fname))]
-    fpath = [os.path.join(project_dir, "train_data/{}".format(f)) for f in forder]
+    fpath = [os.path.join(project_dir, "train_data/{}".format(f))
+             for f in forder]
     for name, file in zip(fname, fpath):
         df = pd.read_csv(file)
         if method == "node2vec":
@@ -149,24 +158,24 @@ def get_model():
 def predict(X, y):
     pass
 
+
 if __name__ == "__main__":
     # data_stats()
-    train_test_split()
+    # train_test_split()
     # df = pd.read_csv("../../train_data/ia-contact.csv")
     # run_node2vec(df, "ia-contact")
-    # if args.method == "node2vec":
-    #     run_node2vec(dataset=args.dataset, n_jobs=args.n_jobs)
-    # elif args.method == "triad":
-    #     run_triad(dataset=args.dataset, n_jobs=args.n_jobs)
-    # elif args.method == "htne":
-    #     run_htne(dataset=args.dataset, n_jobs=args.n_jobs)
-    # elif args.method == "tnode":
-    #     run_tnode(dataset=args.dataset, n_jobs=args.n_jobs)
-    # elif args.method == "gta":
-    #     run_gta(dataset=args.dataset, n_jobs=1, start=args.start, end=args.end)
-    # else:
-    #     raise NotImplementedError("Method {} not implemented!".format(args.method))
+    if args.method == "node2vec":
+        run_node2vec(dataset=args.dataset, n_jobs=args.n_jobs)
+    elif args.method == "triad":
+        run_triad(dataset=args.dataset, n_jobs=args.n_jobs)
+    elif args.method == "htne":
+        run_htne(dataset=args.dataset, n_jobs=args.n_jobs)
+    elif args.method == "tnode":
+        run_tnode(dataset=args.dataset, n_jobs=args.n_jobs)
+    elif args.method == "gta":
+        run_gta(dataset=args.dataset, n_jobs=args.n_jobs,
+                start=args.start, end=args.end)
+    else:
+        raise NotImplementedError(
+            "Method {} not implemented!".format(args.method))
     # iterate_datasets()
-    
-    
-        

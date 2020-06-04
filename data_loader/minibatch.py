@@ -22,7 +22,7 @@ FLAGS = flags.FLAGS
 
 def load_data(datadir="/nfs/zty/Graph/Dynamic-Graph/ctdne_data", dataset="ia-contact"):
     # ensure that node_id is stored as string format
-    edges = pd.read_csv("{}/{}.edges".format(datadir, dataset))
+    edges = pd.read_csv("{}/{}.csv".format(datadir, dataset))
     nodes = pd.read_csv("{}/{}.nodes".format(datadir, dataset))
     return edges, nodes
 
@@ -43,8 +43,8 @@ class TemporalEdgeBatchIterator(object):
     Adjacency list are stored in two arrays, one for neighbors, another for the corresponding timestamps.
     """
 
-    def __init__(self, edges, nodes, placeholders, train_edges_num, test_edges_num, 
-            batch_size=128, context_size=20, max_degree=100, neg_sample_size=1, **kwargs):
+    def __init__(self, edges, nodes, placeholders, val_ratio, test_ratio,
+                 batch_size=128, context_size=20, max_degree=100, neg_sample_size=1, **kwargs):
         """Nodes is padded with a dummy node: 0, neg_samples are implemented in models.
         """
         self.eps = 1e-7
@@ -92,7 +92,8 @@ class TemporalEdgeBatchIterator(object):
         self.max_degree = max_degree
         self.adj_ids, self.adj_tss, self.degrees = self.construct_adj()
         self.neg_sample_size = neg_sample_size
-        self.train_test_split(train_edges_num, test_edges_num)
+        # remove unseen nodes from test set
+        self.train_test_split(val_ratio, test_ratio)
         self.batch_num = 0
 
     def _node_prune(self, edges, min_score=5):
@@ -155,9 +156,31 @@ class TemporalEdgeBatchIterator(object):
                 adj_tss[i, :deg[i]] = adj_tss_list[i]
         return adj_ids, adj_tss, deg
 
-    def train_test_split(self, train_edges_num, test_edges_num):
-        self.train_idx = list(range(train_edges_num))
-        self.test_idx = list(range(train_edges_num, train_edges_num + test_edges_num))
+    def train_test_split(self, val_ratio, test_ratio):
+        ''' Edges of unseen nodes in the training set will be discarded.
+        '''
+        edges = self.edges
+        train_ratio = 1 - val_ratio - test_ratio
+        train_nums = int(len(edges) * train_ratio)
+        val_nums = int(len(edges) * val_ratio)
+        test_nums = int(len(edges) * test_ratio)
+        self.train_idx = list(range(train_nums))
+        self.val_idx = list(range(train_nums, train_nums + val_nums))
+
+        train_df = self.edges.iloc[:train_nums+val_nums]
+        train_nodes = set(train_df["from_node_id"]).union(
+            train_df["to_node_id"])
+        test_df = self.edges.iloc[train_nums +
+                                  val_nums:].reset_index(drop=True)
+        test_nodes = set(test_df["from_node_id"]).union(test_df["to_node_id"])
+        unseen_nodes = test_nodes - train_nodes
+        from_edges = self.edges["from_node_id"].apply(
+            lambda x: x not in unseen_nodes)
+        to_edges = self.edges["to_node_id"].apply(
+            lambda x: x not in unseen_nodes)
+        drop_edges = np.logical_and(from_edges, to_edges)
+        self.edges = self.edges[drop_edges].reset_index(drop=True)
+        self.test_idx = list(range(train_nums + val_nums, len(edges)))
 
     def neg_toids(self, batch_to, times=1):
         """Sampling negative to_nodes with respect to from_nodes
@@ -194,9 +217,14 @@ class TemporalEdgeBatchIterator(object):
         Returns:
             context_edges: (batch_size, context_size)
         """
-        context_idx = [np.arange(idx-self.context_size, idx)
-                       for idx in batch_idx]
-        context_idx = np.concatenate(np.maximum(context_idx, 0))
+        batch_idx = np.array(batch_idx, np.int64)
+        batch_idx = np.reshape(batch_idx, (-1, 1))
+        offset = np.reshape(np.arange(self.context_size, 0, -1), (1, -1))
+        context_idx = batch_idx - offset
+        # context_idx = [np.arange(idx-self.context_size, idx)
+        #    for idx in batch_idx]
+        # context_idx = np.concatenate(np.maximum(context_idx, 0))
+        context_idx = np.reshape(np.maximum(context_idx, 0), [-1])
         # context_edges = [self.edges.iloc[indices] for indices in context_idx]
         return self.edges.iloc[context_idx]
 
@@ -238,19 +266,36 @@ class TemporalEdgeBatchIterator(object):
         def ceil(x): return int(np.ceil(len(x) / self.batch_size))
         return ceil(self.train_idx), ceil(self.val_idx), ceil(self.test_idx)
 
+    def valid_batch(self):
+        batch_num = len(self.val_idx) // self.batch_size
+        for i in range(batch_num):
+            start_idx = i * self.batch_size
+            end_idx = min((i + 1) * self.batch_size, len(self.val_idx))
+            batch_idx = self.val_idx[start_idx: end_idx]
+            yield self.batch_feed_dict(batch_idx)
+
     def test_batch(self, edges):
-        # don't need negative samples
+        # we have to transform node ids with id2idx map
+        edges['from_node_id'] = edges['from_node_id'].map(self.id2idx)
+        edges['to_node_id'] = edges['to_node_id'].map(self.id2idx)
+        dtypes = edges.dtypes
+        # Assure the dtype consistency
+        dtypes[["from_node_id", "to_node_id"]] = int
+        # Assure timestamp consistency
+        edges["timestamp"] = edges["timestamp"] + self.eps
+        # we sample true neighbors for negative test pairs
         test_idx = np.tile(np.reshape(self.test_idx, [-1, 1]), 2)
-        test_idx = np.reshape(test_idx, [-1]) # [1, 2, 3] => [1, 1, 2, 2, 3, 3]
+        # [1, 2, 3] => [1, 1, 2, 2, 3, 3]
+        test_idx = np.reshape(test_idx, [-1])
         batch_num = int(np.ceil(len(edges) / self.batch_size))
         for i in range(batch_num):
             start_idx = i * self.batch_size
-            end_idx = start_idx + self.batch_size
+            end_idx = min(start_idx + self.batch_size, len(edges))
             batch = edges.iloc[start_idx: end_idx]
             batch_from = batch["from_node_id"].tolist()
             batch_to = batch["to_node_id"].tolist()
             timestamp = batch["timestamp"].tolist()
-
+            # print("test_batch %d/%d " % (i, batch_num))
             batch_idx = test_idx[start_idx: end_idx]
             context_edges = self.get_context_edges(batch_idx)
             context_from = context_edges["from_node_id"].tolist()
@@ -258,11 +303,11 @@ class TemporalEdgeBatchIterator(object):
             context_timestamp = context_edges["timestamp"].tolist()
 
             feed_dict = dict()
-        
+
             feed_dict.update({self.placeholders["batch_size"]: len(batch)})
             feed_dict.update({self.placeholders["batch_from"]: batch_from})
             feed_dict.update({self.placeholders["batch_to"]: batch_to})
-            feed_dict.update({self.placeholders["batch_neg"]: batch_to})
+            # feed_dict.update({self.placeholders["batch_neg"]: batch_to})
             feed_dict.update({self.placeholders["timestamp"]: timestamp})
 
             feed_dict.update({self.placeholders["context_from"]: context_from})
@@ -323,7 +368,8 @@ if __name__ == "__main__":
 
     # edges, nodes = load_data(dataset="CTDNE-fb-forum")
     edges, nodes = load_data(dataset="JODIE-reddit")
-    batch = TemporalEdgeBatchIterator(edges, nodes, placeholders)
+    batch = TemporalEdgeBatchIterator(
+        edges, nodes, placeholders, val_ratio=0.1, test_ratio=0.2)
     batch.shuffle()
     print("Preprocessing time:", datetime.now() - start_time)
 

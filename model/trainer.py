@@ -1,43 +1,47 @@
 import os
 import time
+from collections import namedtuple
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from tensorflow.layers import conv1d
-from collections import namedtuple
-from tqdm import trange
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from tensorflow.layers import conv1d
+from tqdm import trange
 
+from data_loader.minibatch import (TemporalEdgeBatchIterator,
+                                   TemporalNeighborSampler, load_data)
+from data_loader.neigh_samplers import (MaskNeighborSampler,
+                                        TemporalNeighborSampler)
 from model.aggregators import *
+from model.gta import GraphTemporalAttention, SAGEInfo
 from model.inits import glorot, zeros
-from model.layers import Layer, Dense
+from model.layers import Dense, Layer
 from model.models import GeneralizedModel
 from model.prediction import BipartiteEdgePredLayer
-from data_loader.minibatch import TemporalNeighborSampler
-from data_loader.minibatch import load_data, TemporalEdgeBatchIterator
-from data_loader.neigh_samplers import MaskNeighborSampler, TemporalNeighborSampler
-from model.gta import GraphTemporalAttention, SAGEInfo
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 
 
 class ModelTrainer():
-    def __init__(self, edges, nodes, train_edges, test_edges):
+    def __init__(self, edges, nodes, val_ratio, test_ratio):
         self.placeholders = self.construct_placeholders()
         self.nodes = nodes
         self.edges = edges
         # config model
-        self.preprocess(edges, nodes, train_edges, test_edges)
+        self.preprocess(edges, nodes, val_ratio=val_ratio,
+                        test_ratio=test_ratio)
         self.params = {
             "dropout": FLAGS.dropout,
             "weight_decay": FLAGS.weight_decay,
-            "use_context": FLAGS.use_context
+            "use_context": FLAGS.use_context,
+            "epochs": FLAGS.epochs
         }
 
-
     def log_dir(self):
-        log_dir = FLAGS.base_log_dir + "{}-{}".format(FLAGS.dataset, FLAGS.method)
+        log_dir = FLAGS.base_log_dir + \
+            "{}-{}".format(FLAGS.dataset, FLAGS.method)
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
             os.chmod(log_dir, 0o777)
@@ -69,13 +73,12 @@ class ModelTrainer():
         summary_writer = tf.summary.FileWriter(self.log_dir(), sess.graph)
         return sess, merged, summary_writer
 
-    def preprocess(self, edges, nodes, train_edges, test_edges):
-
+    def preprocess(self, edges, nodes, val_ratio, test_ratio):
         # placeholders = construct_placeholders()
         # test_edges are both positive and negative samples
-        self.batch = TemporalEdgeBatchIterator(edges, nodes, self.placeholders, 
-                                        len(train_edges), len(test_edges) // 2,
-                                        batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree, context_size=FLAGS.context_size)
+        self.batch = TemporalEdgeBatchIterator(edges, nodes, self.placeholders,
+                                               val_ratio, test_ratio,
+                                               batch_size=FLAGS.batch_size, max_degree=FLAGS.max_degree, context_size=FLAGS.context_size)
 
         adj_info, ts_info = self.batch.adj_ids, self.batch.adj_tss
         if FLAGS.sampler == "mask":
@@ -83,11 +86,13 @@ class ModelTrainer():
         elif FLAGS.sampler == "temporal":
             sampler = TemporalNeighborSampler(adj_info, ts_info)
         else:
-            raise NotImplementedError("Sampler %s not supported." % FLAGS.sampler)
+            raise NotImplementedError(
+                "Sampler %s not supported." % FLAGS.sampler)
 
         layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_1, FLAGS.dim_1),
-                    SAGEInfo("node", sampler, FLAGS.samples_2, FLAGS.dim_2)]
-        ctx_layer_infos = [SAGEInfo("node", sampler, FLAGS.samples_2, FLAGS.dim_2)]
+                       SAGEInfo("node", sampler, FLAGS.samples_2, FLAGS.dim_2)]
+        ctx_layer_infos = [
+            SAGEInfo("node", sampler, FLAGS.samples_2, FLAGS.dim_2)]
         self.model = GraphTemporalAttention(
             self.placeholders, None, adj_info, ts_info, self.batch.degrees, layer_infos,
             ctx_layer_infos, sampler, bipart=self.batch.bipartite, n_users=self.batch.n_users)
@@ -102,21 +107,34 @@ class ModelTrainer():
         placeholders = self.placeholders
         batch = self.batch
         batch_num = len(self.batch.train_idx) // FLAGS.batch_size
-        with trange(batch_num, disable=True) as batch_bar:
+        with trange(batch_num, disable=(not FLAGS.display)) as batch_bar:
+            self.sess.run(tf.local_variables_initializer())
             while not batch.end():
                 batch_bar.set_description("batch %04d" % batch_num)
                 feed_dict = batch.next_train_batch()
                 feed_dict.update({placeholders['dropout']: FLAGS.dropout})
                 outs = self.sess.run(
-                    [self.merged, self.model.opt_op, self.model.loss, self.model.acc, self.model.auc], feed_dict=feed_dict)
-                tot_loss += outs[2] * feed_dict[placeholders["batch_size"]]
-                tot_acc += outs[3] * feed_dict[placeholders["batch_size"]]
-                loss, acc = outs[2], outs[3]
-               
+                    [self.merged, self.model.opt_op, self.model.loss, self.model.acc_update, self.model.auc_update], feed_dict=feed_dict)
+                # tot_loss += outs[2] * feed_dict[placeholders["batch_size"]]
+                # tot_acc += outs[3] * feed_dict[placeholders["batch_size"]]
+                loss, acc, auc = outs[2], outs[3], outs[4]
+
                 batch_bar.update()
-                batch_bar.set_postfix(loss=loss, acc=acc)
+                batch_bar.set_postfix(loss=loss, auc=auc)
                 self.summary_writer.add_summary(
                     outs[0], epoch * batch_num + self.batch.batch_num)
+
+    def valid(self):
+        placeholders = self.placeholders
+        batch = self.batch
+        batch_num = len(self.batch.val_idx) // FLAGS.batch_size
+
+        self.sess.run(tf.local_variables_initializer())
+        for feed_dict in batch.valid_batch():
+            outs = self.sess.run(
+                [self.model.acc_update, self.model.auc_update], feed_dict=feed_dict)
+            acc, auc = outs[0], outs[1]
+        return auc
 
     def test(self, edges):
         # when test_ratio is set, the context edges are also determined
@@ -124,17 +142,21 @@ class ModelTrainer():
         ts_delta = edges["timestamp"].shift(-1) - edges["timestamp"]
         assert (np.all(ts_delta[:len(ts_delta) - 1] >= 0))
 
-        id2idx = {row["node_id"]: row["id_map"]
-                       for index, row in self.nodes.iterrows()}
-        id2idx["padding_node"] = 0
-        edges["from_node_id"] = edges["from_node_id"].map(id2idx)
-        edges["to_node_id"] = edges["to_node_id"].map(id2idx)
+        # leave all transformations inside TemporalEdgeBatchIterator
+        # id2idx = {row["node_id"]: row["id_map"]
+        #           for index, row in self.nodes.iterrows()}
+        # id2idx["padding_node"] = 0
+        # edges["from_node_id"] = edges["from_node_id"].map(id2idx)
+        # edges["to_node_id"] = edges["to_node_id"].map(id2idx)
         batch_num = len(edges) // (FLAGS.batch_size * 2)
+        # print("test_idx %d test_edges %d" %
+        #   (len(self.batch.test_idx), len(edges)))
         preds = []
         for feed_dict in self.batch.test_batch(edges):
             # # print(feed_dict)
             # break
-            outs = self.sess.run([self.model.pred_op, self.model.loss], feed_dict=feed_dict)
+            outs = self.sess.run(
+                [self.model.pred_op], feed_dict=feed_dict)
             # outs = self.sess.run([self.model.samples_from], feed_dict=feed_dict)
             # print("samples_from", outs[0])
             # print("loss: %.2f" % outs[1])
@@ -142,16 +164,18 @@ class ModelTrainer():
         return np.array(preds)
 
     def save_models(self):
-        save_path = "saved_models/{dataset}/{use_context}-{dropout:.2f}.ckpt".format(dataset=FLAGS.dataset, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
+        save_path = "saved_models/{dataset}/{use_context}-{context_size}-{dropout:.2f}.ckpt".format(
+            dataset=FLAGS.dataset, context_size=FLAGS.context_size, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
         if not os.path.exists("saved_models/{}".format(FLAGS.dataset)):
             os.makedirs("saved_models/{}".format(FLAGS.dataset))
-            os.chmod("saved_models/{dataset}".format(dataset=FLAGS.dataset), 0o777)
+            os.chmod("saved_models/{}".format(FLAGS.dataset), 0o777)
         saver = tf.train.Saver(max_to_keep=1)
         saver.save(self.sess, save_path)
         #os.chmod(save_path, 0o777)
-    
+
     def restore_models(self):
-        load_path = "saved_models/{dataset}/{use_context}-{dropout:.2f}.ckpt".format(dataset=FLAGS.dataset, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
+        load_path = "saved_models/{dataset}/{use_context}-{dropout:.2f}.ckpt".format(
+            dataset=FLAGS.dataset, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
         print("Load model from path {}".format(load_path))
         saver = tf.train.Saver()
         saver.restore(self.sess, load_path)
