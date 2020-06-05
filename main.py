@@ -28,7 +28,9 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('dataset', 'ia-contact', 'experiment dataset')
 flags.DEFINE_string('method', 'GTA', 'experiment method')
 flags.DEFINE_string('sampler', 'mask', 'neighbor sampler')
+flags.DEFINE_boolean('dynamic_neighbor', True, 'use dynamic neighbors')
 flags.DEFINE_boolean('use_context', False, 'use temporal context mechanism')
+flags.DEFINE_integer('context_size', 1, 'number of temporal context samples')
 flags.DEFINE_string('loss', 'xent', 'loss function')
 flags.DEFINE_float('learning_rate', 0.0001, 'initial learning rate')
 flags.DEFINE_integer('epochs', 1, 'number of epochs to train')
@@ -43,7 +45,6 @@ flags.DEFINE_integer(
     'dim_1', 128, 'Size of output dim (final is 2x this, if using concat)')
 flags.DEFINE_integer(
     'dim_2', 128, 'Size of output dim (final is 2x this, if using concat)')
-flags.DEFINE_integer('context_size', 1, 'number of temporal context samples')
 flags.DEFINE_integer('batch_size', 128, 'minibatch size.')
 flags.DEFINE_boolean(
     'concat', False, 'Use concat between neighbor features and self features.')

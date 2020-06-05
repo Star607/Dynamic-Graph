@@ -37,7 +37,10 @@ class ModelTrainer():
             "weight_decay": FLAGS.weight_decay,
             "use_context": FLAGS.use_context,
             "epochs": FLAGS.epochs,
-            "context_size": FLAGS.context_size
+            "context_size": FLAGS.context_size,
+            "sampler": FLAGS.sampler,
+            "dynamic_neighbor": FLAGS.dynamic_neighbor,
+            "max_degree": FLAGS.max_degree
         }
 
     def log_dir(self):
@@ -142,7 +145,8 @@ class ModelTrainer():
         # assert timestamp is increasing
         ts_delta = edges["timestamp"].shift(-1) - edges["timestamp"]
         assert (np.all(ts_delta[:len(ts_delta) - 1] >= 0))
-
+        if not FLAGS.dynamic_neighbor:
+            edges["timestamp"] = min(edges["timestamp"])
         # leave all transformations inside TemporalEdgeBatchIterator
         # id2idx = {row["node_id"]: row["id_map"]
         #           for index, row in self.nodes.iterrows()}
