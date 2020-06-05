@@ -36,7 +36,8 @@ class ModelTrainer():
             "dropout": FLAGS.dropout,
             "weight_decay": FLAGS.weight_decay,
             "use_context": FLAGS.use_context,
-            "epochs": FLAGS.epochs
+            "epochs": FLAGS.epochs,
+            "context_size": FLAGS.context_size
         }
 
     def log_dir(self):

@@ -60,7 +60,7 @@ class MaskNeighborSampler(Layer):
         # Attention! the last batch is always smaller than a normal batch
         # batch_size >= tf.shape(ids)[0]
         ids, tss, batch_size, num_samples = inputs
-        print("batch_size:", batch_size)
+        # print("batch_size:", batch_size)
         num_ids = tf.shape(ids)[0]
         batch_size = num_ids
         len_adj = tf.shape(self.adj_info)[1]

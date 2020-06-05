@@ -47,6 +47,9 @@ class TemporalEdgeBatchIterator(object):
                  batch_size=128, context_size=20, max_degree=100, neg_sample_size=1, **kwargs):
         """Nodes is padded with a dummy node: 0, neg_samples are implemented in models.
         """
+        edges, train_nums, val_nums = self.test_unseen_nodes_prune(edges,
+                                                                   val_ratio, test_ratio)
+
         self.eps = 1e-7
         # id start from 1, avoiding collides with the dummy node 0
         self.id2idx = {row["node_id"]:  row["id_map"]
@@ -92,8 +95,8 @@ class TemporalEdgeBatchIterator(object):
         self.max_degree = max_degree
         self.adj_ids, self.adj_tss, self.degrees = self.construct_adj()
         self.neg_sample_size = neg_sample_size
-        # remove unseen nodes from test set
-        self.train_test_split(val_ratio, test_ratio)
+
+        self.train_test_split(train_nums, val_nums)
         self.batch_num = 0
 
     def _node_prune(self, edges, min_score=5):
@@ -156,31 +159,40 @@ class TemporalEdgeBatchIterator(object):
                 adj_tss[i, :deg[i]] = adj_tss_list[i]
         return adj_ids, adj_tss, deg
 
-    def train_test_split(self, val_ratio, test_ratio):
+    def train_test_split(self, train_nums, val_nums):
         ''' Edges of unseen nodes in the training set will be discarded.
         '''
         edges = self.edges
-        train_ratio = 1 - val_ratio - test_ratio
+        # train_ratio = 1 - val_ratio - test_ratio
+        # train_nums = int(len(edges) * train_ratio)
+        # val_nums = int(len(edges) * val_ratio)
+        # test_nums = int(len(edges) * test_ratio)
+        # remove the padding edge (0, 0, 0) from training set
+        self.train_idx = list(range(1, train_nums+1))
+        self.val_idx = list(range(train_nums+1, train_nums + val_nums+1))
+        self.test_idx = list(range(train_nums + val_nums+1, len(edges)))
+
+    def test_unseen_nodes_prune(self, edges, val_ratio, test_ratio):
+        # df = df.drop("state_label", axis=1)
+        edges = edges.sort_values(by="timestamp").reset_index(drop=True)
+        train_ratio = 1 - test_ratio
         train_nums = int(len(edges) * train_ratio)
         val_nums = int(len(edges) * val_ratio)
-        test_nums = int(len(edges) * test_ratio)
-        self.train_idx = list(range(train_nums))
-        self.val_idx = list(range(train_nums, train_nums + val_nums))
 
-        train_df = self.edges.iloc[:train_nums+val_nums]
+        train_df = edges.iloc[:train_nums].reset_index(drop=True)
         train_nodes = set(train_df["from_node_id"]).union(
             train_df["to_node_id"])
-        test_df = self.edges.iloc[train_nums +
-                                  val_nums:].reset_index(drop=True)
+        test_df = edges.iloc[train_nums:].reset_index(drop=True)
         test_nodes = set(test_df["from_node_id"]).union(test_df["to_node_id"])
         unseen_nodes = test_nodes - train_nodes
-        from_edges = self.edges["from_node_id"].apply(
+        from_edges = edges["from_node_id"].apply(
             lambda x: x not in unseen_nodes)
-        to_edges = self.edges["to_node_id"].apply(
+        to_edges = edges["to_node_id"].apply(
             lambda x: x not in unseen_nodes)
         drop_edges = np.logical_and(from_edges, to_edges)
-        self.edges = self.edges[drop_edges].reset_index(drop=True)
-        self.test_idx = list(range(train_nums + val_nums, len(edges)))
+        edges = edges[drop_edges].reset_index(drop=True)
+
+        return edges, train_nums - val_nums, val_nums
 
     def neg_toids(self, batch_to, times=1):
         """Sampling negative to_nodes with respect to from_nodes

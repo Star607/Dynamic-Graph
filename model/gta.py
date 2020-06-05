@@ -203,7 +203,7 @@ class GraphTemporalAttention(GeneralizedModel):
             learning_rate=FLAGS.learning_rate)
         self.build()
 
-    @timeit
+    # @timeit # compute tensorflow compilation time
     def sample(self, inputs, timestamp, layer_infos, batch_size):
         # Also for neg_samples and context_samples
         samples = [inputs]

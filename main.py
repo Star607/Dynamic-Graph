@@ -73,6 +73,7 @@ def get_free_gpu():
     return str(bestGPU)
 
 
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = get_free_gpu()
 
 
@@ -103,11 +104,11 @@ def write_result(label, preds, params):
 
 
 def main(argv=None):
-    print("Loading training data...")
+    print("Loading training data {}.".format(FLAGS.dataset))
     edges, nodes = load_data(datadir="./ctdne_data/", dataset=FLAGS.dataset)
     train_edges = pd.read_csv("../train_data/{}.csv".format(FLAGS.dataset))
     test_edges = pd.read_csv("../test_data/{}.csv".format(FLAGS.dataset))
-    print("Done loading training data...")
+    print("Done loading training data.")
     # test_ratio is consistent with the comparison experiment
     trainer = ModelTrainer(edges, nodes, val_ratio=0.05, test_ratio=0.25)
     print(len(train_edges), len(test_edges), 2 * len(trainer.batch.edges))
