@@ -102,6 +102,11 @@ def lr_evaluate(X_train, y_train, X_test, y_test):
     return acc, f1, auc
 
 
+# def incremental_lr_evaluate(X_train, y_train, X_tests, y_tests):
+#     clf = LogisticRegression(random_state=42).fit(X_train, y_train)
+#     for x_test, y_test in zip(X_tests, y_tests):
+
+
 def write_result(dataset, method, params, metrics, result_dir="/nfs/zty/Graph/Dynamic-Graph/comp_results"):
     acc, f1, auc = metrics
     res_path = "{}/{}.csv".format(result_dir, dataset)
