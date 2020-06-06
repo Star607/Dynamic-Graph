@@ -197,13 +197,30 @@ def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=1
     comps = []
     for name in fname:
         cmd = command.format(dataset=name)
+        # commands.append(cmd)
+        commands.append(cmd + " --nodynamic_neighbor")
+        commands.append(cmd + " --sampler temporal")
+        # commands.append(
+        # cmd + " --sampler mask --use_context --context_size 10")
+        # commands.append(
+        #     cmd + " --sampler temporal --use_context --context_size 10")
         commands.append(
-            cmd + " --sampler temporal --use_context --context_size 10")
+            cmd + " --sampler temporal --use_context --context_size 1")
+        commands.append(
+            cmd + " --sampler temporal --use_context --context_size 5")
+        commands.append(
+            cmd + " --sampler temporal --use_context --context_size 20")
+        commands.append(
+            cmd + " --sampler mask --use_context --context_size 1")
+        commands.append(
+            cmd + " --sampler mask --use_context --context_size 5")
+        commands.append(
+            cmd + " --sampler mask --use_context --context_size 20")
         # comps.append(cmd + " --sampler mask --use_context --context_size 20")
-    comps = repeat_string(comps)
+    # comps = repeat_string(comps)
     commands = repeat_string(commands)
     print("Preprocessing finished.")
-    Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in comps)
+    # Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in comps)
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
 
