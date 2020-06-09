@@ -122,13 +122,14 @@ def main(argv=None):
         trainer.train(epoch=epoch)
         val_auc = trainer.valid()
         print(f"val_auc: {val_auc}")
+        # trainer.save_models(epoch=epoch)
         if early_stopper.early_stop_check(val_auc):
             print(f"No improvement over {early_stopper.max_round} epochs")
             trainer.params["epochs"] = epoch
+            # trainer.restore(epoch=epoch-2)
             break
     y = trainer.test(test_edges)
     write_result(test_edges["label"], y, trainer.params)
-    trainer.save_models()
 
 
 if __name__ == "__main__":

@@ -168,19 +168,21 @@ class ModelTrainer():
             preds.extend(outs[0])
         return np.array(preds)
 
-    def save_models(self):
+    def save_models(self, epoch):
         save_path = "saved_models/{dataset}/{use_context}-{context_size}-{dropout:.2f}.ckpt".format(
             dataset=FLAGS.dataset, context_size=FLAGS.context_size, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
         if not os.path.exists("saved_models/{}".format(FLAGS.dataset)):
             os.makedirs("saved_models/{}".format(FLAGS.dataset))
             os.chmod("saved_models/{}".format(FLAGS.dataset), 0o777)
-        saver = tf.train.Saver(max_to_keep=1)
-        saver.save(self.sess, save_path)
+        if not hasattr(self, "saver"):
+            self.saver = tf.train.Saver(max_to_keep=5)
+        self.saver.save(self.sess, save_path, global_step=epoch)
         #os.chmod(save_path, 0o777)
 
-    def restore_models(self):
+    def restore_models(self, epoch):
         load_path = "saved_models/{dataset}/{use_context}-{dropout:.2f}.ckpt".format(
             dataset=FLAGS.dataset, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
         print("Load model from path {}".format(load_path))
-        saver = tf.train.Saver()
-        saver.restore(self.sess, load_path)
+        if not hasattr(self, "saver"):
+            self.saver = tf.train.Saver(max_to_keep=5)
+        self.saver.restore(self.sess, f'{load_path}-{epoch}')
