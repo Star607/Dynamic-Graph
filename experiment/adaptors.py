@@ -23,7 +23,7 @@ def iterate_datasets(dataset="all", project_dir="/nfs/zty/Graph/"):
     return forder, fpath
 
 
-def run_node2vec(dataset="all", n_jobs=16, project_dir="/nfs/zty/Graph/0-node2vec/"):
+def run_node2vec(dataset="all", n_jobs=16, project_dir="/nfs/zty/Graph/0-node2vec/", **kwargs):
     # :padataframe columns: from_node_id, to_node_id, timestamp
     # train embeddings for nodes
     # python src/main.py --input graph/karate.edgelist --output emb/karate.emd
@@ -40,23 +40,21 @@ def run_node2vec(dataset="all", n_jobs=16, project_dir="/nfs/zty/Graph/0-node2ve
         output_path = os.path.join(project_dir, "emb/{}".format(name))
         if not os.path.exists(input_path):
             df = pd.read_csv(file)
-            df = df[["from_node_id", "to_node_id"]]
+            df = df[["from_idx", "to_idx"]]
             df.to_csv(input_path, index=None, header=None, sep=" ")
 
         for p, q in product([0.25, 0.5, 1, 2, 4], [0.25, 0.5, 1, 2, 4]):
             opath = "{}-{p:.2f}-{q:.2f}".format(output_path, p=p, q=q)
             cmd = command.format(project_dir=project_dir,
                                  input=input_path, output=opath, p=p, q=q)
-            if not os.path.exists(opath):
-                # print(cmd)
-                commands.append(cmd)
-                # os.system(cmd)
-                # subprocess.Popen(cmd)
+            # if not os.path.exists(opath):
+            # print(cmd)
+            commands.append(cmd)
     print("Preprocessing finished.")
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
 
-def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_jobs=16):
+def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_jobs=16, **kwargs):
     # input format: adjacency list
     #   1. undirected
     #   2. all vertices exist in all graphs
@@ -108,7 +106,7 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
             os.makedirs(input_dir)
             df = pd.read_csv(file)
 
-            nodes = set(df["from_node_id"]).union(df["to_node_id"])
+            nodes = set(df["from_idx"]).union(df["to_idx"])
             stride = len(df) // 32
             adjs = [edges2adj(df.iloc[i*stride:(i+1)*stride], nodes)
                     for i in range(32)]
@@ -129,7 +127,7 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
 
-def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=16):
+def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=16, **kwargs):
     fname, fpath = iterate_datasets(dataset=dataset)
     command = "python {project_dir}/HTNE.py -d {input_path} -o {output_path}"
     commands = []
@@ -150,7 +148,7 @@ def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=16):
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
 
-def run_tnode(dataset="all", project_dir="/nfs/zty/Graph/5-tNodeEmbed/", n_jobs=16):
+def run_tnode(dataset="all", project_dir="/nfs/zty/Graph/5-tNodeEmbed/", n_jobs=16, **kwargs):
     fname, fpath = iterate_datasets(dataset=dataset)
     command = "python {project_dir}/src/main.py -d {dataset}"
     commands = []
@@ -166,31 +164,11 @@ def run_tnode(dataset="all", project_dir="/nfs/zty/Graph/5-tNodeEmbed/", n_jobs=
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
 
-def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=1, start=0, end=4):
+def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=1, **kwargs):
+    start, end = kwargs["start"], kwargs["end"]
     fname, _ = iterate_datasets(dataset=dataset)
     fname = [name[:-4] for name in fname[start:end]]
     os.chdir(project_dir)
-    # for name in fname:
-    #     path = "{}/ctdne_data/{}".format(project_dir, name)
-    #     if not (os.path.exists(path+".edges") and os.path.exists(path+".nodes")):
-    #         train_edges = pd.read_csv("{}/../train_data/{}.csv".format(project_dir, name))
-    #         test_edges = pd.read_csv("{}/../test_data/{}.csv".format(project_dir, name))
-    #         pos_edges = test_edges[test_edges["label"] == 1].drop("label", axis=1)
-    #         edges = pd.concat([train_edges, pos_edges])
-    #         edges.to_csv("{}.edges".format(path), index=None)
-
-    #         edges = pd.concat([train_edges, test_edges])
-    #         from_nodes = edges['from_node_id'].tolist()
-    #         to_nodes = edges['to_node_id'].tolist()
-    #         nodes_id = sorted(set(from_nodes + to_nodes))
-    #         nodes = pd.DataFrame(columns=['node_id', 'id_map', 'role', 'label'])
-    #         nodes['node_id'] = nodes_id
-    #         nodes['id_map'] = list(range(1, len(nodes_id) + 1))
-    #         nodes['role'] = 0
-    #         nodes['label'] = 0
-    #         nodes.to_csv("{}.nodes".format(path), index=None)
-    # nodes.to_csv('{}/{}-{}.nodes'.format(store_dir,
-    # project, name), index=None)
 
     command = "python main.py --dataset {dataset} --epochs 50 --dropout 0.2 --weight_decay 1e-5 --learning_rate=0.0001 --nodisplay "
     commands = []
@@ -218,11 +196,11 @@ def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=1
             cmd + " --sampler mask --use_context --context_size 20")
         # comps.append(cmd + " --sampler mask --use_context --context_size 20")
     # comps = repeat_string(comps)
-    commands = repeat_string(commands)
+    # commands = repeat_string(commands, times=1)
     print("Preprocessing finished.")
     # Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in comps)
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
 
 def repeat_string(cmds, times=5):
-    return [cmd for _ in range(times) for cmd in cmds]
+    return [cmd for cmd in cmds for _ in range(times)]

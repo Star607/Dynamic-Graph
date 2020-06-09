@@ -11,5 +11,6 @@ tf_op/*
 ckpt/*
 comp_results/*
 results/*
+summarized_results/*
 saved_models/*
 *.out

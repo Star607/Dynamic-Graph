@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 import time
 from collections import defaultdict
@@ -12,6 +13,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 from experiment.adaptors import iterate_datasets
+from experiment.adaptors import run_node2vec, run_triad, run_htne, run_tnode, run_gta
 
 parser = argparse.ArgumentParser(
     description="Perform contrastive experiments.")
@@ -19,10 +21,40 @@ parser.add_argument("--method", type=str, default="node2vec",
                     help="Contrastive method name.")
 parser.add_argument("--n_jobs", type=int, default=16,
                     help="Job numbers for joblib Parallel function.")
+parser.add_argument("--dataset", type=str,
+                    default="all", help="Specific dataset for experiments; default is all datasets.")
 parser.add_argument("--start", type=int, default=0, help="Datset start index.")
-parser.add_argument("--end", type=int, default=100, help="Datset end index.")
+parser.add_argument("--end", type=int, default=100,
+                    help="Datset end index (exclusive).")
+parser.add_argument("--run", type=bool, default=False,
+                    help="Whether running embeddings.")
+parser.add_argument("--times", type=int, default=1,
+                    help="Experiment repetition times.")
+
 args = parser.parse_args()
 
+
+def set_logger():
+    # set up logger
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    fh = logging.FileHandler(
+        'log/{}-{}-{}-{}.log'.format(args.method, args.start, args.end, str(time.time())))
+    fh.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.WARN)
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+    return logger
+
+
+logger = set_logger()
+logger.info(args)
 
 train_data_dir = "/nfs/zty/Graph/train_data/"
 test_data_dir = "/nfs/zty/Graph/test_data/"
@@ -39,10 +71,31 @@ def load_embeddings(path, skiprows=0, sep=" "):
     return id2idx, embs
 
 
-def evaluate_node2vec(name, project_dir="/nfs/zty/Graph/0-node2vec/emb"):
-    sname = name[:-4]
-    for p, q in product([0.25, 0.5, 1, 2, 4], [0.25, 0.5, 1, 2, 4]):
-        print(name, p, q)
+def iterate_times(method):
+    def worker(*ar, **kw):
+        results = []
+        for _ in range(args.times):
+            logging.info("Times {} begins.".format(_))
+            res = method(*ar, **kw)
+            results.append(res)
+        return results
+    return worker
+
+
+@iterate_times
+def evaluate_node2vec(project_dir="/nfs/zty/Graph/0-node2vec/emb"):
+    fname, _ = iterate_datasets()[args.start: args.end]
+    if args.run:
+        logging.info("Running {} embedding programs.".format("node2vec"))
+        run_node2vec(dataset=args.dataset, n_jobs=args.n_jobs,
+                     start=args.start, end=args.end, times=args.times)
+        logging.info("Done node2vec embedding.")
+    else:
+        logging.info("Use pretrained {} embeddings.".format("node2vec"))
+    for name, p, q in product(fname, [0.25, 0.5, 1, 2, 4], [0.25, 0.5, 1, 2, 4]):
+        sname = name[:-4]
+        logging.info("dataset={}, p={:.2f}, q={:.2f}".format(sname, p, q))
+        # print(name, p, q)
         train_path = os.path.join(train_data_dir, name)
         train_edges = pd.read_csv(train_path)
         test_path = os.path.join(test_data_dir, name)
@@ -61,9 +114,11 @@ def evaluate_node2vec(name, project_dir="/nfs/zty/Graph/0-node2vec/emb"):
     pass
 
 
-def evaluate_triad(name, project_dir="/nfs/zty/Graph/2-DynamicTriad/output"):
+@iterate_times
+def evaluate_triad(project_dir="/nfs/zty/Graph/2-DynamicTriad/output"):
     sname = name[:-4]
-    print(name)
+    logging.info(sname)
+    # print(name)
     train_path = os.path.join(train_data_dir, name)
     train_edges = pd.read_csv(train_path)
     test_path = os.path.join(test_data_dir, name)
@@ -75,20 +130,23 @@ def evaluate_triad(name, project_dir="/nfs/zty/Graph/2-DynamicTriad/output"):
     y_train = train_edges["label"]
     X_test = edge2tabular(test_edges, id2idx, embs)
     y_test = test_edges["label"]
-    print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
-    acc, f1, auc = lr_evaluate(X_train, y_train, X_test, y_test)
-    write_result(sname, "triad", {"beta_1": 0.1,
-                                  "beta_2": 0.1}, (acc, f1, auc))
+    # print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
+    # acc, f1, auc = lr_evaluate(X_train, y_train, X_test, y_test)
+    # write_result(sname, "triad", {"beta_1": 0.1,
+    #                               "beta_2": 0.1}, (acc, f1, auc))
 
 
 def edge2tabular(edges, id2idx, embs):
-    edges["from_node_id"] = edges["from_node_id"].map(id2idx)
-    print(set(edges["to_node_id"]) - set(id2idx.keys()))
-    edges["to_node_id"] = edges["to_node_id"].map(id2idx).astype('int64')
+    edges["from_idx"] = edges["from_idx"].map(id2idx)
+    logger.info("{} unseen from_nodes in id2idx".format(
+        len(set(edges["from_idx"]) - set(id2idx.keys()))))
+    edges["to_idx"] = edges["to_idx"].map(id2idx).astype('int64')
+    logger.info("{} unseen to_nodes in id2idx".format(
+        len(set(edges["to_idx"]) - set(id2idx.keys()))))
     # print(edges.dtypes)
     X = np.zeros((len(edges), 2 * embs.shape[1]))
-    X_from = embs[edges["from_node_id"]]
-    X_to = embs[edges["to_node_id"]]
+    X_from = embs[edges["from_idx"]]
+    X_to = embs[edges["to_idx"]]
     return np.concatenate((X_from, X_to), axis=1)
 
 
@@ -100,11 +158,6 @@ def lr_evaluate(X_train, y_train, X_test, y_test):
     f1 = f1_score(y_test, y_pred)
     auc = roc_auc_score(y_test, y_prob)
     return acc, f1, auc
-
-
-# def incremental_lr_evaluate(X_train, y_train, X_tests, y_tests):
-#     clf = LogisticRegression(random_state=42).fit(X_train, y_train)
-#     for x_test, y_test in zip(X_tests, y_tests):
 
 
 def write_result(dataset, method, params, metrics, result_dir="/nfs/zty/Graph/Dynamic-Graph/comp_results"):
@@ -123,8 +176,15 @@ def write_result(dataset, method, params, metrics, result_dir="/nfs/zty/Graph/Dy
                                for k, v in params.items()])
         params_str = "\"{}\"".format(params_str)
         row = result_str + "," + params_str + "\r\n"
-        print("{}-{}: {:.3f}, {:.3f}, {:.3f}".format(method, dataset, acc, f1, auc))
+        logging.info(
+            "{}-{}: {:.3f}, {:.3f}, {:.3f}".format(method, dataset, acc, f1, auc))
+        # print("{}-{}: {:.3f}, {:.3f}, {:.3f}".format(method, dataset, acc, f1, auc))
         f.write(row)
+
+
+@iterate_times
+def evaluate_gta():
+    run_gta(dataset=args.dataset, start=args.start, end=args.end)
 
 
 if __name__ == "__main__":
@@ -136,12 +196,15 @@ if __name__ == "__main__":
         evaluate = evaluate_htne
     elif args.method == "tnode":
         evaluate = evaluate_tnode
+    elif args.method == "gta":
+        evaluate = evaluate_gta
     else:
         raise NotImplementedError(
             "Method {} not implemented!".format(args.method))
-    fname, _ = iterate_datasets()
-    for name in fname[args.start: args.end]:
-        print(name)
-        evaluate(name)
+    # fname, _ = iterate_datasets()
+    # for name in fname[args.start: args.end]:
+    #     print(name)
+    #     evaluate(name)
+    evaluate()
     # evaluate(fname[0])
     # Parallel(n_jobs=16)(delayed(evaluate)(name) for name in fname[args.start: args.end])
