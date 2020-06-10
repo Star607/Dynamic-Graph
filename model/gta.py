@@ -399,8 +399,8 @@ class GraphTemporalAttention(GeneralizedModel):
         labels = tf.cast(labels, tf.int32)
         self.acc, self.acc_update = tf.metrics.accuracy(labels, preds)
         self.auc, self.auc_update = tf.metrics.auc(labels, probs)
-        tf.summary.scalar("acc", self.acc)
-        tf.summary.scalar("auc", self.auc)
+        tf.summary.scalar("acc", self.acc_update)
+        tf.summary.scalar("auc", self.auc_update)
 
     def _predict(self, scores):
         if FLAGS.loss == "xent":
