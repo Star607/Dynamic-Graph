@@ -93,7 +93,8 @@ class TemporalEdgeBatchIterator(object):
         self.batch_size = batch_size
         self.context_size = context_size
         self.max_degree = max_degree
-        self.adj_ids, self.adj_tss, self.degrees = self.construct_adj()
+        self.adj_ids, self.adj_tss, self.degrees = self.construct_adj(
+            self.edges)
         self.neg_sample_size = neg_sample_size
 
         self.train_test_split(train_nums, val_nums)
@@ -118,7 +119,7 @@ class TemporalEdgeBatchIterator(object):
         #       (len(edges), len(reserve_ids)))
         return edges
 
-    def construct_adj(self):
+    def construct_adj(self, edges):
         """Construct truncated adjacency list and each entry is sorted in temporal order except padding zeros.
 
         Return:
@@ -129,7 +130,7 @@ class TemporalEdgeBatchIterator(object):
         adj_tss_list = [[] for _ in range(len(self.id2idx))]
         # print(len(self.id2idx), len(self.id2idx))
         # Attention! df.iterrows will change dtype for each column!
-        for row in self.edges.itertuples():
+        for row in edges.itertuples():
             from_id, to_id, ts = row.from_node_id, row.to_node_id, row.timestamp
             if from_id >= len(self.id2idx) or to_id >= len(self.id2idx):
                 print(row)

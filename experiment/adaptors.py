@@ -64,15 +64,15 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
     # equally divided into 32 snapshots
     def edges2adj(df, nodes):
         # df: DataFrame, nodes: dict(node_name, list)
-        rdf = df[["to_node_id", "from_node_id", "timestamp"]]
-        rdf.columns = ["from_node_id", "to_node_id", "timestamp"]
-        df = pd.concat([df, rdf]).sort_values(
+        rdf = df[["to_idx", "from_idx", "timestamp"]]
+        rdf.columns = ["from_idx", "to_idx", "timestamp"]
+        df = pd.concat([df, rdf], sort=True).sort_values(
             by="timestamp").reset_index(drop=True)
         adj_ids = {nid: [] for nid in nodes}
         adj_cnt = {nid: [] for nid in nodes}
-        for name, group in df.groupby("from_node_id"):
-            vals = group["to_node_id"].value_counts().keys().tolist()
-            cnts = group["to_node_id"].value_counts().tolist()
+        for name, group in df.groupby("from_idx"):
+            vals = group["to_idx"].value_counts().keys().tolist()
+            cnts = group["to_idx"].value_counts().tolist()
             adj_ids[name].extend(vals)
             adj_cnt[name].extend(cnts)
         # for name, group in df.groupby("to_node_id"):
@@ -97,7 +97,9 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
         file.close()
 
     fname, fpath = iterate_datasets(dataset=dataset)
-    command = "python {project_dir} -n 32 -d {input_dir} -o {output_dir} --beta-smooth {b_1} --beta-triad {b_2} -b 256 -K 128"
+    fname = fname[kwargs["start"]: kwargs["end"]]
+    fpath = fpath[kwargs["start"]: kwargs["end"]]
+    command = "python {project_dir} -n {timestep} -d {input_dir} -o {output_dir} -l {stepsize} -s {stepsize} --beta-smooth {b_1} --beta-triad {b_2} -K 128 --cachefn cache"
     commands = []
     for name, file in zip(fname, fpath):
         name = name[:-4]
@@ -113,15 +115,16 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
             # for i, (adj_ids, adj_cnt) in enumerate(adjs):
             Parallel(n_jobs=32)(delayed(write_adj)(input_dir, i, adj_ids, adj_cnt)
                                 for i, (adj_ids, adj_cnt) in enumerate(adjs))
-
-        b_1 = b_2 = 0.1
-        output_dir = os.path.join(
-            project_dir, "output/{}-{:.1f}-{:.1f}".format(name, b_1, b_2))
-        if not os.path.exists(output_dir) or len(os.listdir(output_dir)) < 32:
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
+        for stepsize in [1, 4, 8]:
+            b_1 = b_2 = 0.1
+            output_dir = os.path.join(
+                project_dir, "output/{}-{}".format(name, stepsize))
+            if not os.path.exists(output_dir) or len(os.listdir(output_dir)) < 32:
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
+                    os.chmod(output_dir, 0o777)
             cmd = command.format(
-                project_dir=project_dir, input_dir=input_dir, output_dir=output_dir, b_1=b_1, b_2=b_2)
+                project_dir=project_dir, timestep=32//stepsize, input_dir=input_dir, output_dir=output_dir, stepsize=stepsize, b_1=b_1, b_2=b_2)
             commands.append(cmd)
     print("Preprocessing finished.")
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)

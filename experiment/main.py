@@ -172,6 +172,7 @@ def train_test2idx(root_dir="/nfs/zty/Graph"):
 
 if __name__ == "__main__":
     data_stats(project_dir="/nfs/zty/Graph/train_data")
+    # data_stats(project_dir="/nfs/zty/Graph/test_data")
     # to_dataframe()
     # train_test2idx()
     # train_test_split()
