@@ -1,14 +1,14 @@
-| Method | Input Format | Output Format |
-| --- | --- | ---|
-| Node2Vec | from_node to_node | node_name K_DIM |
-| GraphSage | from_node, to_node | tensorflow checkpoint |
-| Dynamic Triad | snapshot: node_name adj_node weight | node_name K_DIM |
-| tNodeEmbed |||
-| HTDE |||
-| CTDNE |||
-| EvolveGCN |||
-| TGAT ||| 
-| TEAM | from_node, to_node, timestamp | tensorflow checkpoint |
+| Method        | Input Format                        | Output Format         |
+| ------------- | ----------------------------------- | --------------------- |
+| Node2Vec      | from_node to_node                   | node_name K_DIM       |
+| GraphSage     | from_node, to_node                  | tensorflow checkpoint |
+| Dynamic Triad | snapshot: node_name adj_node weight | node_name K_DIM       |
+| tNodeEmbed    | 存在数据穿越的可能                  |                       |
+| HTNE          |                                     |                       |
+| CTDNE         | 嵌入的节点数少于训练集节点数        |                       |
+| EvolveGCN     |                                     |                       |
+| TGAT          | 对测试集节点做了mask？              |                       |
+| TEAM          | from_node, to_node, timestamp       | tensorflow checkpoint |
 
 ### Data Preprocessing
    - Map each node to consecutive integers, starting from 1.

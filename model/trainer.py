@@ -179,10 +179,13 @@ class ModelTrainer():
         self.saver.save(self.sess, save_path, global_step=epoch)
         #os.chmod(save_path, 0o777)
 
-    def restore_models(self, epoch):
+    def restore_models(self, epoch=None):
         load_path = "saved_models/{dataset}/{use_context}-{dropout:.2f}.ckpt".format(
             dataset=FLAGS.dataset, use_context=FLAGS.use_context, dropout=FLAGS.dropout)
         print("Load model from path {}".format(load_path))
         if not hasattr(self, "saver"):
             self.saver = tf.train.Saver(max_to_keep=5)
-        self.saver.restore(self.sess, f'{load_path}-{epoch}')
+        if epoch is None:
+            self.saver.restore(self.sess, load_path)
+        else:
+            self.saver.restore(self.sess, f'{load_path}-{epoch}')

@@ -153,14 +153,17 @@ def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=16, **k
 
 def run_tnode(dataset="all", project_dir="/nfs/zty/Graph/5-tNodeEmbed/", n_jobs=16, **kwargs):
     fname, fpath = iterate_datasets(dataset=dataset)
-    command = "python {project_dir}/src/main.py -d {dataset}"
+    fname = fname[kwargs["start"]: kwargs["end"]]
+    command = "python {project_dir}/src/main.py -d {dataset} -n {nstep}"
     commands = []
-    for name, file in zip(fname, fpath):
+    for name, nstep in product(fname, [32]):
         name = name[:-4]
         dump_foler = os.path.join(project_dir, "data/{}".format(name))
         if not os.path.exists(dump_foler):
             os.makedirs(dump_foler)
-        cmd = command.format(project_dir=project_dir, dataset=name)
+            os.chmod(dump_foler, 0o777)
+        cmd = command.format(project_dir=project_dir,
+                             dataset=name, nstep=nstep)
         commands.append(cmd)
     os.chdir(project_dir)
     print("Preprocessing finished.")

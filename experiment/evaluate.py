@@ -70,6 +70,8 @@ def load_embeddings(path, skiprows=0, sep=" "):
     embs = df.loc[:, 1:].to_numpy()
     # print(embs.shape)
     assert(embs.shape[1] == 128)
+    # Padding 0 row as embeddings all zero
+    embs = np.concatenate([np.zeros((1, 128)), embs])
     return id2idx, embs
 
 
@@ -171,6 +173,57 @@ def evaluate_triad(project_dir="/nfs/zty/Graph/2-DynamicTriad/output"):
                                       "beta_2": 0.1, "stepsize": stepsize}, (acc, f1, auc))
 
 
+@iterate_times
+def evaluate_tnode():
+    fname, _ = iterate_datasets(dataset=args.dataset)
+    fname = fname[args.start: args.end]
+    logger.info("Running {} embedding programs.".format(args.method))
+    run_tnode(dataset=args.dataset, n_jobs=args.n_jobs,
+              start=args.start, end=args.end, times=args.times)
+    logger.info("Done {}.".format(args.method))
+
+
+@iterate_times
+def evaluate_ctdne(project_dir="/nfs/zty/Graph/Dynamic-Graph/ctdne_output"):
+    from .ctdne import ctdne
+    fname, _ = iterate_datasets(dataset=args.dataset)
+    fname = fname[args.start: args.end]
+    if args.run:
+        logger.info("Running {} embedding programs.".format(args.method))
+        Parallel(n_jobs=args.n_jobs)(
+            delayed(ctdne)(name[:-4]) for name in fname)
+        logger.info("Done {} embeddings.".format(args.method))
+    for name in fname:
+        sname = name[:-4]
+        logger.info(
+            "dataset={}, num_walk=10, walk_length=80, context_window=10".format(sname))
+        # print(name, p, q)
+        train_path = os.path.join(train_data_dir, name)
+        train_edges = pd.read_csv(train_path)
+        test_path = os.path.join(test_data_dir, name)
+        test_edges = pd.read_csv(test_path)
+
+        fpath = "{}/{}.emb".format(project_dir, sname)
+        id2idx, embs = load_embeddings(fpath, skiprows=0, sep=",")
+        # TemporalRandomWalk loses many nodes, so we remove unseen nodes from train_edges.
+        from_mask = train_edges["from_idx"].apply(lambda s: s in id2idx.keys())
+        to_mask = train_edges["to_idx"].apply(lambda s: s in id2idx.keys())
+        mask = np.logical_and(from_mask, to_mask)
+        if sum(mask) > 1:
+            logger.info(
+                "{} {} edges removed from train edges.".format(sname, len(mask)))
+            train_edges = train_edges[mask].reset_index(drop=True)
+
+        X_train = edge2tabular(train_edges, id2idx, embs)
+        y_train = train_edges["label"]
+        X_test = edge2tabular(test_edges, id2idx, embs)
+        y_test = test_edges["label"]
+        # print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
+        acc, f1, auc = lr_evaluate(X_train, y_train, X_test, y_test)
+        write_result(sname, "ctdne", {
+                     "num_walk": 10, "walk_length": 80, "context_window": 10}, (acc, f1, auc))
+
+
 def edge2tabular(edges, id2idx, embs):
     unseen_from_nodes = set(edges["from_idx"]) - set(id2idx.keys())
     unseen_to_nodes = set(edges["to_idx"]) - set(id2idx.keys())
@@ -198,7 +251,7 @@ def lr_evaluate(X_train, y_train, X_test, y_test):
 
 def write_result(dataset, method, params, metrics, result_dir="/nfs/zty/Graph/Dynamic-Graph/comp_results"):
     acc, f1, auc = metrics
-    res_path = "{}/{}.csv".format(result_dir, dataset)
+    res_path = "{}/{}-{}.csv".format(result_dir, dataset, args.method)
     headers = ["method", "dataset", "accuracy", "f1", "auc", "params"]
     if not os.path.exists(res_path):
         f = open(res_path, 'w+')
@@ -224,6 +277,15 @@ def evaluate_gta():
 
 
 @iterate_times
+def evaluate_tgat():
+    fname, _ = iterate_datasets(dataset=args.dataset)
+    fname = fname[args.start: args.end]
+    if args.run:
+        for name in fname:
+            pass
+
+
+@iterate_times
 def evaluate_sage():
     fname, _ = iterate_datasets()
     fname = [name[:-4] for name in fname[args.start:args.end]]
@@ -239,8 +301,8 @@ if __name__ == "__main__":
         evaluate = evaluate_node2vec
     elif args.method == "triad":
         evaluate = evaluate_triad
-    elif args.method == "htne":
-        evaluate = evaluate_htne
+    elif args.method == "ctdne":
+        evaluate = evaluate_ctdne
     elif args.method == "tnode":
         evaluate = evaluate_tnode
     elif args.method == "gta":

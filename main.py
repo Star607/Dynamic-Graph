@@ -82,7 +82,8 @@ def write_result(label, preds, params):
     acc = accuracy_score(label, preds > 0.5)
     f1 = f1_score(label, preds > 0.5)
     auc = roc_auc_score(label, preds)
-    res_path = "{}/{}.csv".format(FLAGS.result_dir, FLAGS.dataset)
+    res_path = "{}/{}-{}.csv".format(FLAGS.result_dir,
+                                     FLAGS.dataset, FLAGS.method)
     headers = ["method", "dataset", "accuracy", "f1", "auc", "params"]
     if not os.path.exists(res_path):
         f = open(res_path, 'w')
@@ -129,7 +130,8 @@ def main(argv=None):
             # trainer.restore(epoch=epoch-2)
             break
     y = trainer.test(test_edges)
-    write_result(test_edges["label"], y, trainer.params)
+    if FLAGS.epochs > 1:
+        write_result(test_edges["label"], y, trainer.params)
 
 
 if __name__ == "__main__":

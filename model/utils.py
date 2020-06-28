@@ -1,5 +1,6 @@
 import numpy as np
-
+import random
+import gpustat
 # Utility function and class
 
 
@@ -40,3 +41,15 @@ class RandEdgeSampler(object):
         src_index = np.random.randint(0, len(self.src_list), size)
         dst_index = np.random.randint(0, len(self.dst_list), size)
         return self.src_list[src_index], self.dst_list[dst_index]
+
+
+def get_free_gpu():
+    stats = gpustat.GPUStatCollection.new_query()
+    ids = map(lambda gpu: int(gpu.entry['index']), stats)
+    ratios = map(lambda gpu: float(
+        gpu.entry['memory.total']) - float(gpu.entry['memory.used']), stats)
+    pairs = list(zip(ids, ratios))
+    random.shuffle(pairs)
+    bestGPU = max(pairs, key=lambda x: x[1])[0]
+    print("setGPU: Setting GPU to: {}".format(bestGPU))
+    return str(bestGPU)

@@ -347,7 +347,7 @@ def write_result(label, preds, params):
     acc = accuracy_score(label, preds > 0.5)
     f1 = f1_score(label, preds > 0.5)
     auc = roc_auc_score(label, preds)
-    res_path = "comp_results/{}.csv".format(FLAGS.dataset)
+    res_path = "comp_results/{}-{}.csv".format(FLAGS.dataset, "GraphSAGE")
     headers = ["method", "dataset", "accuracy", "f1", "auc", "params"]
     if not os.path.exists(res_path):
         f = open(res_path, 'w')
