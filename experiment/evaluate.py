@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+from datetime import datetime
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -40,12 +41,12 @@ def set_logger():
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     fh = logging.FileHandler(
-        'log/{}-{}-{}-{}.log'.format(args.method, args.start, args.end, str(time.time())))
+        'log/{}-{}-{}-{}.log'.format(args.method, args.start, args.end, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     fh.setLevel(logging.DEBUG)
     ch = logging.StreamHandler()
     ch.setLevel(logging.WARN)
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s', "%Y-%m-%d %H:%M:%S")
     fh.setFormatter(formatter)
     ch.setFormatter(formatter)
     logger.addHandler(fh)

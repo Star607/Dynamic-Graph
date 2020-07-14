@@ -40,7 +40,7 @@ class TemporalEdgeBatchIterator(object):
 
     Edges are sorted in temporal ascending order.
 
-    Adjacency list are stored in two arrays, one for neighbors, another for the corresponding timestamps.
+    Adjacency list are truncated with max_degree neighbors then stored in two arrays, one for neighbors, another for the corresponding timestamps.
     """
 
     def __init__(self, edges, nodes, placeholders, val_ratio, test_ratio,
