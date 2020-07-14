@@ -1,3 +1,4 @@
+import argparse
 import os
 import logging
 import time
@@ -13,5 +14,15 @@ import dgl
 
 from data_loader.minibatch import load_data, TemporalEdgeBatchIterator
 
+
 class GTA(nn.Module):
+    pass
+
+
+def config_parser():
+    parser = argparse.ArgumentParser()
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
     pass
