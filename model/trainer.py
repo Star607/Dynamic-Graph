@@ -40,7 +40,8 @@ class ModelTrainer():
             "context_size": FLAGS.context_size,
             "sampler": FLAGS.sampler,
             "dynamic_neighbor": FLAGS.dynamic_neighbor,
-            "max_degree": FLAGS.max_degree
+            "max_degree": FLAGS.max_degree,
+            "sampling": FLAGS.sampling
         }
 
     def log_dir(self):

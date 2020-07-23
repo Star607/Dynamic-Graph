@@ -16,3 +16,6 @@ results/*
 summarized_results/*
 saved_models/*
 *.out
+*/.ipynb_checkpoints/*
+*.svg
+*.pdf

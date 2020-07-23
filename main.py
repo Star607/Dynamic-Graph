@@ -28,6 +28,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('dataset', 'ia-contact', 'experiment dataset')
 flags.DEFINE_string('method', 'GTA', 'experiment method')
 flags.DEFINE_string('sampler', 'mask', 'neighbor sampler')
+flags.DEFINE_string('sampling', 'recursive', 'recursively sampling temporal neighbors')
 flags.DEFINE_boolean('dynamic_neighbor', True, 'use dynamic neighbors')
 flags.DEFINE_boolean('use_context', False, 'use temporal context mechanism')
 flags.DEFINE_integer('context_size', 1, 'number of temporal context samples')

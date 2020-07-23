@@ -212,9 +212,14 @@ class GraphTemporalAttention(GeneralizedModel):
         for k in range(len(layer_infos)):
             t = len(layer_infos) - k - 1
             num_samples = layer_infos[t].num_samples
+            # filter the adjacency list recursively obeying the temporal constraint
+            if FLAGS.sampling == "recursive":
+                node, tmask = self.sampler(
+                    (samples[k], timemasks[k], batch_size, num_samples))
             # filter the adjacency list according to batch timestamp
-            node, tmask = self.sampler(
-                (samples[k], timefilters[k], batch_size, num_samples))
+            else:
+                node, tmask = self.sampler(
+                    (samples[k], timefilters[k], batch_size, num_samples))
             samples.append(tf.reshape(node, [-1]))
             timemasks.append(tf.reshape(tmask, [-1]))
             new_filter = repeat_vector(timefilters[k], num_samples)
