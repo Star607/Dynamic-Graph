@@ -27,9 +27,11 @@ from model.utils import get_free_gpu
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpu", type=bool, default=False,
+    parser.add_argument("--gpu", dest="gpu", action="store_true",
                         help="Whether use GPU.")
-    return parser.parse_args(["--gpu", "True"])
+    parser.add_argument("--no-gpu", dest="gpu", action="store_false",
+                        help="Whether use GPU.")
+    return parser.parse_args(["--gpu"])
 
 
 args = parse_args()
@@ -40,13 +42,13 @@ def set_logger():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
-    fh = logging.FileHandler('log/dgl-{}.log'.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    fh.setLevel(logging.DEBUG)
+    # fh = logging.FileHandler('log/dgl-{}.log'.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    # fh.setLevel(logging.DEBUG)
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.WARN)
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s', "%Y-%m-%d %H:%M:%S")
-    fh.setFormatter(formatter)
+    # fh.setFormatter(formatter)
     ch.setFormatter(formatter)
     # logger.addHandler(fh)
     logger.addHandler(ch)
@@ -209,11 +211,14 @@ def construct_dglgraph(edges, nodes, device, bidirected=False):
     '''
     src = edges["from_node_id"]
     dst = edges["to_node_id"]
-    etime = torch.tensor(edges["timestamp"])
-    efeature = torch.tensor(edges.iloc[:, 4:].to_numpy()) if len(
-        edges.columns) > 4 else torch.zeros((len(edges), 1))
-    nfeature = torch.tensor(nodes.iloc[:, 4:].to_numpy()) if len(
-        nodes.columns) > 4 else torch.nn.Embedding(len(nodes), 4).weight
+    etime = torch.tensor(edges["timestamp"], device=device)
+    efeature = torch.tensor(edges.iloc[:, 4:].to_numpy(), device=device) if len(
+        edges.columns) > 4 else torch.ones((len(edges), 1), device=device)
+
+    def xavier_normal(
+        *args): return nn.init.xavier_normal(torch.empty(*args, device=device))
+    nfeature = torch.tensor(nodes.iloc[:, 4:].to_numpy(), device=device) if len(
+        nodes.columns) > 4 else nn.Parameter(xavier_normal(len(nodes), 4))
     if bidirected:
         # In this way, we repeat the edge one by one, remaining the increasing temporal order.
         u = np.vstack((src, dst)).transpose().flatten()
@@ -224,9 +229,9 @@ def construct_dglgraph(edges, nodes, device, bidirected=False):
     # Adding edges in the time increasing order, so that group_apply_edges will process the neighbors temporally ascendingly.
     # We only add single directed edges, but treat them as undirected edges for representation. That is we store both source and destionation node representations at timestamp t on the same edge (s, d, t), assuming
     g = dgl.DGLGraph((src, dst))
-    g.ndata["nfeat"] = nfeature.to(device)
-    g.edata["timestamp"] = etime.to(device)
-    g.edata["efeat"] = efeature.to(device)
+    g.ndata["nfeat"] = nfeature  # .to(device)
+    g.edata["timestamp"] = etime  # .to(device)
+    g.edata["efeat"] = efeature  # .to(device)
     return g
 
 
@@ -272,14 +277,39 @@ def main():
     logger.info(f"Begin Conv. Device {device}")
     dim = g.ndata["nfeat"].shape[-1]
     dims = [dim, 108, 4]
-    for l in range(1, 3):
-        logger.info(f"Graph Conv Layer {l}.")
-        model = TSAGEConv(in_feats=dims[l-1], out_feats=dims[l], aggregator_type="pool")
-        model = model.to(device)
-        src_feat, dst_feat = model(g, current_layer=l)
-        g.edata[f"src_feat{l}"] = src_feat
-        g.edata[f"dst_feat{l}"] = dst_feat
+    # for l in range(1, 3):
+    #     logger.info(f"Graph Conv Layer {l}.")
+    #     model = TSAGEConv(in_feats=dims[l-1], out_feats=dims[l], aggregator_type="mean")
+    #     model = model.to(device)
+    #     src_feat, dst_feat = model(g, current_layer=l)
+    #     g.edata[f"src_feat{l}"] = src_feat
+    #     g.edata[f"dst_feat{l}"] = dst_feat
+    model = TSAGEConv(in_feats=dims[0], out_feats=dims[1], aggregator_type="mean")
+    model = model.to(device)
+    import copy
+    nfeat_copy = copy.deepcopy(g.ndata["nfeat"])
+    loss_fn = nn.CosineEmbeddingLoss(margin=0.5)
+    import itertools
+    optimizer = torch.optim.Adam(itertools.chain([g.ndata["nfeat"]], model.parameters()), lr=0.01)
+    # print(nfeat_copy)
+    for i in range(10):
+        logger.info("Epoch %3d", i)
+        optimizer.zero_grad()
+        src_feat, dst_feat = model(g, current_layer=1)
+        labels = torch.ones((g.number_of_edges()), device=device)
+        loss = loss_fn(src_feat, dst_feat, labels)
+        loss.backward()
+        optimizer.step()
+        print("nfeat")
+        print(g.ndata["nfeat"].storage().data_ptr())
+        print("nfeat copy")
+        print(nfeat_copy.storage().data_ptr())
+        assert not torch.all(torch.eq(nfeat_copy, g.ndata["nfeat"]))
     print(src_feat.shape, dst_feat.shape)
+    # z = src_feat.sum()
+    # z.backward()
+    print(g.ndata["nfeat"].grad)
+    return src_feat, dst_feat
 
 
 def nodeflow_test():
