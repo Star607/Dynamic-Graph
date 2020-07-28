@@ -34,29 +34,24 @@ def parse_args():
     return parser.parse_args(["--gpu"])
 
 
-args = parse_args()
-
-
-def set_logger():
+def set_logger(log_file=False):
     # set up logger
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
-    # fh = logging.FileHandler('log/dgl-{}.log'.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    # fh.setLevel(logging.DEBUG)
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.WARN)
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s', "%Y-%m-%d %H:%M:%S")
-    # fh.setFormatter(formatter)
     ch.setFormatter(formatter)
-    # logger.addHandler(fh)
     logger.addHandler(ch)
+    if log_file:
+        fh = logging.FileHandler(
+            'log/dgl-{}.log'.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
     return logger
-
-
-logger = set_logger()
-logger.info(args)
 
 
 def timeit(method):
@@ -86,8 +81,8 @@ class TSAGEConv(SAGEConv):
     activation : callable activation function/layer or None, optional
     """
 
-    def __init__(self, **kwargs):
-        super(TSAGEConv, self).__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super(TSAGEConv, self).__init__(*args, **kwargs)
 
     def _lstm_reducer(self, edge_feat):
         """LSTM processing for temporal edges.
@@ -117,25 +112,37 @@ class TSAGEConv(SAGEConv):
                 h_self, h_neighs = h_neighs, h_self
                 deg_self, deg_neighs = deg_neighs, deg_self
             assert h_self.shape == h_neighs.shape
-            _, deg, dim = h_self.shape
+            # add dropout layer for node embeddings
+            h_self, h_neighs = self.feat_drop(h_self), self.feat_drop(h_neighs)
+            buc, deg, dim = h_self.shape
+            # Attention! There are edges with the same timestamp. So the lower triangular assumption is not hold.
+            ts = edges.data["timestamp"].view(buc, deg, 1)  # (B, Deg, 1) if the last dimension is 1
+            mask = (ts.permute(0, 2, 1) <= ts).float()  # (B, Deg, Deg)
+
             # assert the timestamp is increasing
-            orders = torch.argsort(edges.data["timestamp"], dim=1)
-            assert torch.all(torch.eq(torch.arange(deg).to(orders), orders))
-            mask = torch.tril(torch.ones(deg, deg)).to(h_neighs)
+            # orders = torch.argsort(edges.data["timestamp"], dim=1)
+            # assert torch.all(torch.eq(torch.arange(deg).to(orders), orders))
+            # mask = torch.tril(torch.ones(deg, deg)).to(h_neighs)
+            # # add dropout for edge messages
+            # mask = self.feat_drop(mask)
             # sum over all valid neighbors: (bucket_size, deg, dim)
             # mask_feat = torch.matmul(mask, h_neighs)
             if self._aggre_type == "mean":
-                mask_feat = torch.matmul(mask, h_neighs)
-                mask_feat = mask_feat / mask.sum(dim=1, keepdim=True)
+                mask_feat = torch.bmm(mask, h_neighs)
+                # mask_feat = torch.matmul(mask, h_neighs)
+                # mask_feat = mask_feat / mask.sum(dim=-1, keepdim=True)
             elif self._aggre_type == "gcn":
-                mask_feat = torch.matmul(mask, h_neighs)
-                mask_feat = mask_feat + h_self
-                norm_cof = (deg_neighs + 1.0).sqrt() * (deg_self + 1.0).sqrt()
-                mask_feat = mask_feat / norm_cof.unsqueeze(-1)
+                mask_feat = torch.bmm(mask, h_neighs)
+                # mask_feat = torch.matmul(mask, h_neighs)
+                norm_cof = deg_self.to(mask_feat) + 1
+                mask_feat = (mask_feat + h_self) / norm_cof.unsqueeze(-1)
             elif self._aggre_type == "pool":
-                # If performing max_pooling, we compute maximum till i-th row using ``cummax()``.
+                # # Attention! When there are edges with the same timestamp, cummax will change the max pooling semantic. We have to perform max pooling with mask.
+                # # If performing max_pooling, we compute maximum till i-th row using ``cummax()``.
                 h_neighs = F.relu(self.fc_pool(h_neighs))
-                mask_feat = h_neighs.cummax(dim=1).values
+                # mask_feat = h_neighs.cummax(dim=1).values
+                mask_feat = torch.bmm(mask, h_neighs)
+                # mask_feat = mask_feat / mask.sum(dim=-1, keepdim=True)
             elif self._aggre_type == 'lstm':
                 raise NotImplementedError
             else:
@@ -145,6 +152,7 @@ class TSAGEConv(SAGEConv):
                 rst = self.fc_neigh(mask_feat)
             else:
                 rst = self.fc_self(h_self) + self.fc_neigh(mask_feat)
+                rst = rst / mask.sum(dim=-1, keepdim=True)
 
             if self.activation is not None:
                 rst = self.activation(rst)
@@ -176,7 +184,7 @@ class TSAGEConv(SAGEConv):
         """
         graph = graph.local_var()
         # compute for gcn normalization
-        graph.ndata["deg"] = graph.in_degrees() + graph.out_degrees()
+        graph.ndata["deg"] = (graph.in_degrees() + graph.out_degrees()).to(graph.ndata["nfeat"])
         if current_layer >= 2:
             src_feat = f'src_feat{current_layer - 1}'
             dst_feat = f'dst_feat{current_layer - 1}'
@@ -202,7 +210,7 @@ class GTRConv(nn.Module):
     pass
 
 
-def construct_dglgraph(edges, nodes, device, bidirected=False):
+def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
     ''' Edges should be a pandas DataFrame, and its columns should be columns comprise of  from_node_id, to_node_id, timestamp, state_label, features_separated_by_comma. Here `state_label` varies in edge classification tasks.
 
     Nodes should be a pandas DataFrame, and its columns should be columns comprise of node_id, id_map, role, label, features_separated_by_comma.
@@ -215,10 +223,12 @@ def construct_dglgraph(edges, nodes, device, bidirected=False):
     efeature = torch.tensor(edges.iloc[:, 4:].to_numpy(), device=device) if len(
         edges.columns) > 4 else torch.ones((len(edges), 1), device=device)
 
-    def xavier_normal(
-        *args): return nn.init.xavier_normal(torch.empty(*args, device=device))
-    nfeature = torch.tensor(nodes.iloc[:, 4:].to_numpy(), device=device) if len(
-        nodes.columns) > 4 else nn.Parameter(xavier_normal(len(nodes), 4))
+    if len(nodes.columns) > 4:
+        nfeature = torch.tensor(nodes.iloc[:, 4:].to_numpy(), device=device)
+    else:
+        nfeature = nn.Parameter(nn.init.xavier_normal_(
+            torch.empty(len(nodes), node_dim, device=device)))
+
     if bidirected:
         # In this way, we repeat the edge one by one, remaining the increasing temporal order.
         u = np.vstack((src, dst)).transpose().flatten()
@@ -235,37 +245,54 @@ def construct_dglgraph(edges, nodes, device, bidirected=False):
     return g
 
 
-def test_graph(name=None):
+def test_graph():
     """Load data using ``data_loader.minibatch.load_data()``. If name is not given, we return a sample graph with 10 nodes and 45 edges, which is a complete graph.
     """
-    if name is None:
-        nodes = pd.DataFrame(columns=["node_id", "id_map", "role", "label"])
-        nodes["node_id"] = np.arange(10)
-        nodes["id_map"] = np.arange(10)
-        nodes["role"] = 0
-        nodes["label"] = 0
-        edges = pd.DataFrame(
-            columns=["from_node_id", "to_node_id", "timestamp", "state_label"])
-        edges["from_node_id"] = np.concatenate([
-            [i for _ in range(9 - i)] for i in range(10)])
-        edges["to_node_id"] = np.concatenate([
-            [j for j in range(i + 1, 10)] for i in range(10)])
-        edges["timestamp"] = np.arange(45, dtype=np.float)
-        edges["state_label"] = 0
-        dtypes = edges.dtypes
-        dtypes[["from_node_id", "to_node_id"]] = int
-        edges = edges.astype(dtypes)
+    nodes = pd.DataFrame(columns=["node_id", "id_map", "role", "label"])
+    nodes["node_id"] = np.arange(10)
+    nodes["id_map"] = np.arange(10)
+    nodes["role"] = 0
+    nodes["label"] = 0
+    edges = pd.DataFrame(
+        columns=["from_node_id", "to_node_id", "timestamp", "state_label"])
+    edges["from_node_id"] = np.concatenate([
+        [i for _ in range(9 - i)] for i in range(10)])
+    edges["to_node_id"] = np.concatenate([
+        [j for j in range(i + 1, 10)] for i in range(10)])
+    edges["timestamp"] = np.arange(45, dtype=np.float)
+    edges["state_label"] = 0
+    dtypes = edges.dtypes
+    dtypes[["from_node_id", "to_node_id"]] = int
+    edges = edges.astype(dtypes)
+    return edges, nodes
+
+
+def padding_node(edges, nodes):
+    if 0 in set(nodes["id_map"]):
         return edges, nodes
-    else:
-        edges, nodes = load_data(dataset=name)
-        # add node 0
-        nodes.loc[len(nodes)] = [0] * len(nodes)
-        # add self-loop edge (0, 0)
-        edges.loc[len(edges)] = [0] * len(edges.columns)
-        return edges, nodes
+    print("padding node 0")
+    nodes.loc[len(nodes)] = [0] * len(nodes.columns)
+    dtypes = nodes.dtypes
+    dtypes[["id_map"]] = int
+    nodes = nodes.astype(dtypes).sort_values(by="id_map").reset_index(drop=True)
+
+    # delta = edges["timestamp"].shift(-1) - edges["timestamp"]
+    # assert np.all(delta.loc[:len(delta)-1] >= 0)
+    edges["timestamp"] = edges["timestamp"] - \
+        edges["timestamp"].min() + 1e-6  # assume time positive
+    edges.loc[len(edges)] = [0] * len(edges.columns)
+    dtypes = edges.dtypes
+    dtypes[["from_node_id", "to_node_id"]] = int
+    edges = edges.astype(dtypes).sort_values(by="timestamp").reset_index(drop=True)
+    # delta = edges["timestamp"].shift(-1) - edges["timestamp"]
+    # assert np.all(delta[:len(delta)-1] >= 0)
+    return edges, nodes
 
 
 def main():
+    args = parse_args()
+    logger = set_logger()
+    logger.info(args)
     if args.gpu:
         device = torch.device("cuda:{}".format(get_free_gpu()))
     else:
@@ -294,6 +321,7 @@ def main():
     # print(nfeat_copy)
     for i in range(10):
         logger.info("Epoch %3d", i)
+        model.train()
         optimizer.zero_grad()
         src_feat, dst_feat = model(g, current_layer=1)
         labels = torch.ones((g.number_of_edges()), device=device)

@@ -76,7 +76,7 @@ class TemporalEdgeBatchIterator(object):
 
         # assert timestamp is increasing
         ts_delta = edges_full["timestamp"].shift(-1) - edges_full["timestamp"]
-        assert (np.all(ts_delta[:len(ts_delta) - 1] >= 0))
+        assert np.all(ts_delta[:len(ts_delta) - 1] >= 0)
 
         self.id_name = ["from_node_id", "to_node_id", "timestamp"]
         self.edges = edges_full[self.id_name]
