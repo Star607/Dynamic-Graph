@@ -142,7 +142,12 @@ def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=16, **k
                 project_dir, "../train_data/{}.csv".format(name)))
             df["timestamp"] = (df["timestamp"] - df["timestamp"].min()) / \
                 (df["timestamp"].max() - df["timestamp"].min())
-            df.to_csv(input_path, header=None, sep=" ")
+            df = df["from_idx", "to_idx", "timestamp"]  # the 3rd column is time
+            nodes = set(df.from_idx).union(set(df.to_idx))
+            id2idx = {nid: idx for idx, nid in enumerate(nodes)}
+            df.from_idx = df.from_idx.map(id2idx)
+            df.to_idx = df.to_idx.map(id2idx)
+            df.to_csv(input_path, index=None, header=None, sep=" ")
         output_path = os.path.join(project_dir, "emb/{}.emb".format(name))
         if not os.path.exists(output_path):
             commands.append(command.format(project_dir=project_dir,
