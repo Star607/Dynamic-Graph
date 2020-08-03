@@ -140,6 +140,7 @@ def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=16, **k
         if not os.path.exists(input_path):
             df = pd.read_csv(os.path.join(
                 project_dir, "../train_data/{}.csv".format(name)))
+            # We ensure that the train, valid, and test data are already re-indexed during preprocessing. So HTNE can process these files directly.
             df["timestamp"] = (df["timestamp"] - df["timestamp"].min()) / \
                 (df["timestamp"].max() - df["timestamp"].min())
             df.to_csv(input_path, header=None, sep=" ")
