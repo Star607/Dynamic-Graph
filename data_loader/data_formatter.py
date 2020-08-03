@@ -43,6 +43,7 @@ Aminer:
     #% ---- the id of references of this paper (there are multiple lines, with each indicating a reference)
     #! --- Abstract
 """
+import argparse
 import os
 import pandas as pd
 
@@ -74,18 +75,17 @@ def ctdne_transf(project_dir, store_dir, project):
         else:
             df.columns = header2
 
-        # edges = pd.DataFrame(columns=edges_cols)
-        # edges[header] = df[header]
-        # edges['state_label'] = 0
-        # edges.to_csv('{}/{}.edges'.format(store_dir,
-        #                                      name), index=None)
+        edges = pd.DataFrame(columns=edges_cols)
+        edges[header] = df[header]
+        edges['state_label'] = 0
+        edges.to_csv('{}/{}.edges'.format(store_dir, name), index=None)
 
         from_nodes = df['from_node_id'].tolist()
         to_nodes = df['to_node_id'].tolist()
         nodes_id = sorted(set(from_nodes + to_nodes))
         nodes = pd.DataFrame(columns=nodes_cols)
         nodes['node_id'] = nodes_id
-        nodes['id_map'] = list(range(1, len(nodes_id) + 1))
+        nodes['id_map'] = list(range(len(nodes_id)))
         nodes['role'] = 0
         nodes['label'] = 0
         nodes.to_csv('{}/{}.nodes'.format(store_dir, name), index=None)
@@ -177,7 +177,12 @@ dirmap = {
 edges_cols = ['from_node_id', 'to_node_id', 'timestamp', 'state_label']
 nodes_cols = ['node_id', 'id_map', 'role', 'label']
 
+
 if __name__ == '__main__':
-    to_csv('CTDNE')
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--d", type=str, required=True, choices=["CTDNE", "NEOTG", "JODIE"])
+    args = parser.parse_args()
+    to_csv(args.d)
+    # to_csv('CTDNE')
     # to_csv('NEOTG')
     # to_csv('JODIE')

@@ -1,7 +1,3 @@
-"""For those models generating embeddings for nodes, we use a LR classifiers to 
-classify if the edge exists. For those end2end models, we abstract a predict 
-operation to provide a probability for existence of the edge.
-"""
 import argparse
 import os
 import time
@@ -176,19 +172,3 @@ if __name__ == "__main__":
     # to_dataframe()
     # train_test2idx()
     # train_test_split()
-    # df = pd.read_csv("../../train_data/ia-contact.csv")
-    # if args.method == "node2vec":
-    #     run_method = run_node2vec
-    # elif args.method == "triad":
-    #     run_method = run_triad
-    # elif args.method == "htne":
-    #     run_method = run_htne
-    # elif args.method == "tnode":
-    #     run_method = run_tnode
-    # elif args.method == "gta":
-    #     run_method = run_gta
-    # else:
-    #     raise NotImplementedError(
-    #         "Method {} not implemented!".format(args.method))
-    # run_method(dataset=args.dataset, n_jobs=args.n_jobs,
-    #            start=args.start, end=args.end, times=args.times)

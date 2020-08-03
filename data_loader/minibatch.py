@@ -20,9 +20,9 @@ flags = tf.app.flags
 FLAGS = flags.FLAGS
 
 
-def load_data(datadir="/nfs/zty/Graph/Dynamic-Graph/ctdne_data", dataset="ia-contact"):
+def load_data(datadir="/nfs/zty/Graph/Dynamic-Graph/graph_data", dataset="CTDNE-ia-contact"):
     # ensure that node_id is stored as string format
-    edges = pd.read_csv("{}/{}.csv".format(datadir, dataset))
+    edges = pd.read_csv("{}/{}.edges".format(datadir, dataset))
     nodes = pd.read_csv("{}/{}.nodes".format(datadir, dataset))
     return edges, nodes
 
@@ -367,22 +367,23 @@ if __name__ == "__main__":
     placeholders = {
         "batch_from": tf.placeholder(tf.int32, shape=(None), name="batch_from"),
         "batch_to": tf.placeholder(tf.int32, shape=(None), name="batch_to"),
+        "batch_neg": tf.placeholder(tf.int32, shape=(None), name="batch_to"),
         "timestamp": tf.placeholder(tf.float64, shape=(None), name="timestamp"),
-        # "batch_size": tf.placeholder(tf.int32, name="batch_size"),
+        "batch_size": tf.placeholder(tf.int32, name="batch_size"),
         "context_from": tf.placeholder(tf.int32, shape=(None), name="context_from"),
         "context_to": tf.placeholder(tf.int32, shape=(None), name="context_to"),
         "context_timestamp": tf.placeholder(tf.float64, shape=(None), name="timestamp"),
-        # "context_size": tf.placeholder(tf.int32, name="context_size")
+        "context_size": tf.placeholder(tf.int32, name="context_size")
     }
 
     sess = tf.Session(config=config)
     merged = tf.summary.merge_all()
     summary_writer = tf.summary.FileWriter("../log", sess.graph)
 
-    # edges, nodes = load_data(dataset="CTDNE-fb-forum")
-    edges, nodes = load_data(dataset="JODIE-reddit")
+    edges, nodes = load_data(dataset="CTDNE-fb-forum")
+    # edges, nodes = load_data(dataset="JODIE-reddit")
     batch = TemporalEdgeBatchIterator(
-        edges, nodes, placeholders, val_ratio=0.1, test_ratio=0.2)
+        edges, nodes, placeholders, batch_size=1024, val_ratio=0.1, test_ratio=0.2)
     batch.shuffle()
     print("Preprocessing time:", datetime.now() - start_time)
 
@@ -392,16 +393,19 @@ if __name__ == "__main__":
     # sampler = TemporalNeighborSampler(
     #     adj_info=batch.adj_ids, ts_info=batch.adj_tss)
     layer_infos = [
-        SAGEInfo("sample_1", 10, 128),
-        SAGEInfo("sample_2", 5, 128)
+        SAGEInfo("sample_1", 25, 128),
+        SAGEInfo("sample_2", 20, 128),
+        SAGEInfo("sample_2", 10, 128)
     ]
 
-    support_sizes = compute_support_sizes(FLAGS.batch_size, layer_infos)
+    support_sizes = compute_support_sizes(1024, layer_infos)
     print("support_sizes", support_sizes)
     sample_1, sample_ts_1 = sampler(
-        (placeholders["batch_from"], placeholders["timestamp"], support_sizes[0], layer_infos[1].num_samples))
+        (placeholders["batch_from"], placeholders["timestamp"], support_sizes[0], layer_infos[2].num_samples))
     sample_2, sample_ts_2 = sampler(
-        (sample_1, sample_ts_1, support_sizes[1], layer_infos[0].num_samples))
+        (sample_1, sample_ts_1, support_sizes[1], layer_infos[1].num_samples))
+    sample_3, sample_ts_3 = sampler(
+        (sample_2, sample_ts_2, support_sizes[2], layer_infos[0].num_samples))
 
     print("Computation graph time:", datetime.now() - start_time)
     it = 0
@@ -420,6 +424,6 @@ if __name__ == "__main__":
         values = sess.run([sample_2, sample_ts_2], feed_dict=feed_dict)
         # if it % 10 == 0:
         print("********Batch: %d time: %d secs********" %
-              (batch.batch_num, (datetime.now() - last_time).seconds))
+              (batch.batch_num, (datetime.now() - last_time).seconds), len(values[0]))
         # it += 1
     print(datetime.now() - start_time)
