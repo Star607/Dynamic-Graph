@@ -5,8 +5,13 @@
 *.pyc
 cache*
 ctdne_data/*
+ctdne_embs/*
 ctdne_output/*
 graph_data/*
+format_data/*
+train_data/*
+valid_data/*
+test_data/*
 log/*
 cuda_example/*
 tf_op/*
@@ -19,3 +24,6 @@ saved_models/*
 */.ipynb_checkpoints/*
 *.svg
 *.pdf
+*/build/*
+*/dist/*
+*/upper_bound_cpp.egg-info/*
