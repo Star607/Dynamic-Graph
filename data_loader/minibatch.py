@@ -14,17 +14,11 @@ import tensorflow as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K  # pylint: disable=import-error
 from data_loader.neigh_samplers import UniformNeighborSampler, MaskNeighborSampler, TemporalNeighborSampler
+from data_loader.data_util import load_data
 
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
-
-
-def load_data(datadir="/nfs/zty/Graph/Dynamic-Graph/graph_data", dataset="CTDNE-ia-contact"):
-    # ensure that node_id is stored as string format
-    edges = pd.read_csv("{}/{}.edges".format(datadir, dataset))
-    nodes = pd.read_csv("{}/{}.nodes".format(datadir, dataset))
-    return edges, nodes
 
 
 # SAGEInfo is a namedtuple that specifies the parameters
