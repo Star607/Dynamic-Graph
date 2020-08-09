@@ -97,6 +97,10 @@ class TSAGEConv(SAGEConv):
 
     def group_func_wrapper(self, groupby, src_feat, dst_feat):
         """Set the group by function. The `onehop_conv` performs different aggregations over all valid temporal neighbors. The final embeddings are stored in the edges, named `src_feat` or `dst_feat`.
+
+        Parameters:
+        ------------
+        deg_indices: Pre-computed index matrices for batch nodes. It is stored as a dictionary, with degree as keys, and the index matrix as values. It differs in source groupby and destination groupby modes.
         """
         def onehop_conv(edges):
             if src_feat.startswith("src_feat"):
@@ -114,35 +118,43 @@ class TSAGEConv(SAGEConv):
             assert h_self.shape == h_neighs.shape
             # add dropout layer for node embeddings
             h_self, h_neighs = self.feat_drop(h_self), self.feat_drop(h_neighs)
+            # print("bucket shape", h_self.shape)
             buc, deg, dim = h_self.shape
-            # Attention! There are edges with the same timestamp. So the lower triangular assumption is not hold.
-            ts = edges.data["timestamp"].view(buc, deg, 1)  # (B, Deg, 1) if the last dimension is 1
-            mask = (ts.permute(0, 2, 1) <= ts).float()  # (B, Deg, Deg)
-
+            # Attention! There are edges with the same timestamp. So the lower triangular assumption is not hold. So we comment the following codes.
             # assert the timestamp is increasing
             # orders = torch.argsort(edges.data["timestamp"], dim=1)
             # assert torch.all(torch.eq(torch.arange(deg).to(orders), orders))
             # mask = torch.tril(torch.ones(deg, deg)).to(h_neighs)
-            # # add dropout for edge messages
             # mask = self.feat_drop(mask)
             # sum over all valid neighbors: (bucket_size, deg, dim)
-            # mask_feat = torch.matmul(mask, h_neighs)
+            # mask_feat = torch.matmul(mask, h_neighs) / mask.sum(dim=-1, keepdim=True)
+            ts = edges.data["timestamp"].view(buc, deg, 1)  # (B, Deg, 1) if the last dimension is 1
+            # The mask matrix would crush out of CUDA memory. For the 58k degree node, it consumes 12GB memory.
+            # mask = (ts.permute(0, 2, 1) <= ts).float()  # (B, Deg, Deg)
+            # We assume the batch mechanism keeps stable during training.
+            # (bucket, deg, dim)
+            indices = edges.data[f"{groupby}_deg_indices"].expand(-1, -1, dim)
+
             if self._aggre_type == "mean":
-                mask_feat = torch.bmm(mask, h_neighs)
-                # mask_feat = torch.matmul(mask, h_neighs)
+                # mask_feat = torch.bmm(mask, h_neighs)
                 # mask_feat = mask_feat / mask.sum(dim=-1, keepdim=True)
+                # mean_cof = torch.arange(deg).add_(1.0).unsqueeze_(-1)
+                mean_cof = edges.data[f"{groupby}_deg_indices"].add(1.0).view(buc, deg, 1)
+                h_feat = h_neighs.cumsum(dim=1) / mean_cof
+                mask_feat = h_feat.gather(dim=1, index=indices)
             elif self._aggre_type == "gcn":
-                mask_feat = torch.bmm(mask, h_neighs)
-                # mask_feat = torch.matmul(mask, h_neighs)
+                # mask_feat = torch.bmm(mask, h_neighs)
+                h_feat = h_neighs.cumsum(dim=1)
+                mask_feat = h_feat.gather(dim=1, index=indices)
                 norm_cof = deg_self.to(mask_feat) + 1
                 mask_feat = (mask_feat + h_self) / norm_cof.unsqueeze(-1)
             elif self._aggre_type == "pool":
-                # # Attention! When there are edges with the same timestamp, cummax will change the max pooling semantic. We have to perform max pooling with mask.
-                # # If performing max_pooling, we compute maximum till i-th row using ``cummax()``.
-                h_neighs = F.relu(self.fc_pool(h_neighs))
-                # mask_feat = h_neighs.cummax(dim=1).values
-                mask_feat = torch.bmm(mask, h_neighs)
+                # mask_feat = torch.bmm(mask, h_neighs)
                 # mask_feat = mask_feat / mask.sum(dim=-1, keepdim=True)
+                # Since we get (upper_bound - 1) indices, we can use cummax() + gather() to perform max_pooling operation.
+                h_neighs = F.relu(self.fc_pool(h_neighs))
+                h_feat = h_neighs.cummax(dim=1).values
+                mask_feat = h_feat.gather(dim=1, index=indices)
             elif self._aggre_type == 'lstm':
                 raise NotImplementedError
             else:
@@ -152,7 +164,7 @@ class TSAGEConv(SAGEConv):
                 rst = self.fc_neigh(mask_feat)
             else:
                 rst = self.fc_self(h_self) + self.fc_neigh(mask_feat)
-                rst = rst / mask.sum(dim=-1, keepdim=True)
+                # rst = rst / mask.sum(dim=-1, keepdim=True)
 
             if self.activation is not None:
                 rst = self.activation(rst)
@@ -188,11 +200,15 @@ class TSAGEConv(SAGEConv):
         if current_layer >= 2:
             src_feat = f'src_feat{current_layer - 1}'
             dst_feat = f'dst_feat{current_layer - 1}'
+            dim = graph.edata[src_feat].shape[-1]
         else:
             src_feat = dst_feat = "nfeat"
+            dim = graph.ndata[src_feat].shape[-1]
 
-        src_conv = self.group_func_wrapper(groupby="src", src_feat=src_feat, dst_feat=dst_feat)
-        dst_conv = self.group_func_wrapper(groupby="dst", src_feat=src_feat, dst_feat=dst_feat)
+        src_conv = self.group_func_wrapper(
+            groupby="src",  src_feat=src_feat, dst_feat=dst_feat)
+        dst_conv = self.group_func_wrapper(
+            groupby="dst",  src_feat=src_feat, dst_feat=dst_feat)
         graph.group_apply_edges(group_by="src", func=src_conv)
         graph.group_apply_edges(group_by="dst", func=dst_conv)
         return graph.edata["src_feat"], graph.edata["dst_feat"]
@@ -228,6 +244,8 @@ def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
     else:
         nfeature = nn.Parameter(nn.init.xavier_normal_(
             torch.empty(len(nodes), node_dim, device=device)))
+        # nfeature = nn.Parameter(nn.init.xavier_uniform_(
+        #     torch.empty(len(nodes), node_dim, device=device)))
 
     if bidirected:
         # In this way, we repeat the edge one by one, remaining the increasing temporal order.
@@ -243,6 +261,19 @@ def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
     g.edata["timestamp"] = etime  # .to(device)
     g.edata["efeat"] = efeature  # .to(device)
     return g
+
+
+def prepare_mp(g):
+    """
+    Explicitly materialize the CSR, CSC and COO representation of the given graph
+    so that they could be shared via copy-on-write to sampler workers and GPU
+    trainers.
+
+    This is a workaround before full shared memory support on heterogeneous graphs.
+    """
+    g.in_degree(0)
+    g.out_degree(0)
+    g.find_edges([0])
 
 
 def test_graph():
