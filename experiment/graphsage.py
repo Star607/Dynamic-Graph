@@ -12,14 +12,15 @@ from tqdm import trange
 
 from data_loader.minibatch import TemporalEdgeBatchIterator
 from data_loader.neigh_samplers import UniformNeighborSampler
+from data_loader.data_util import load_split_edges, load_label_edges
 from model.aggregators import *
 from model.gta import SAGEInfo
 from model.inits import glorot, zeros
 from model.layers import Dense, Layer
 from model.models import GeneralizedModel
 from model.prediction import BipartiteEdgePredLayer
-from main import FLAGS, get_free_gpu, load_data
-from model.utils import EarlyStopMonitor
+from main import FLAGS
+from model.utils import EarlyStopMonitor, get_free_gpu
 
 
 class SAGETrainer():
@@ -343,20 +344,21 @@ class GraphSAGE(GeneralizedModel):
                 "Loss {} not implemented yet.".format(FLAGS.loss))
 
 
-def write_result(label, preds, params):
+def write_result(vallabel, valpreds, label, preds, params):
+    val_auc = roc_auc_score(vallabel, valpreds)
     acc = accuracy_score(label, preds > 0.5)
     f1 = f1_score(label, preds > 0.5)
     auc = roc_auc_score(label, preds)
     res_path = "comp_results/{}-{}.csv".format(FLAGS.dataset, "GraphSAGE")
-    headers = ["method", "dataset", "accuracy", "f1", "auc", "params"]
+    headers = ["method", "dataset", "valid_auc", "accuracy", "f1", "auc", "params"]
     if not os.path.exists(res_path):
         f = open(res_path, 'w')
         f.write(",".join(headers) + "\r\n")
         f.close()
         os.chmod(res_path, 0o777)
     with open(res_path, 'a') as f:
-        result_str = "{},{},{:.4f},{:.4f},{:.4f}".format(
-            "GraphSAGE", FLAGS.dataset, acc, f1, auc)
+        result_str = "{},{},{:.4f},{:.4f},{:.4f},{:.4f}".format(
+            "GraphSAGE", FLAGS.dataset, val_auc, acc, f1, auc)
         params_str = ",".join(["{}={}".format(k, v)
                                for k, v in params.items()])
         params_str = "\"{}\"".format(params_str)
@@ -368,9 +370,10 @@ def write_result(label, preds, params):
 
 def main_sage(argv=None):
     print("Loading training data {}.".format(FLAGS.dataset))
-    edges, nodes = load_data(datadir="./ctdne_data/", dataset=FLAGS.dataset)
-    train_edges = pd.read_csv("../train_data/{}.csv".format(FLAGS.dataset))
-    test_edges = pd.read_csv("../test_data/{}.csv".format(FLAGS.dataset))
+    edges, nodes = load_split_edges(dataset=FLAGS.dataset)
+    edges, nodes = edges[0], nodes[0]
+    label_edges, _ = load_label_edges(dataset=FLAGS.dataset)
+    label_edges = label_edges[0]
     print("Done loading training data.")
     trainer = SAGETrainer(edges, nodes, val_ratio=0.05, test_ratio=0.25)
     early_stopper = EarlyStopMonitor()
@@ -384,8 +387,10 @@ def main_sage(argv=None):
             trainer.params["epochs"] = epoch
             # trainer.restore(epoch=epoch-2)
             break
-    y = trainer.test(test_edges)
-    write_result(test_edges["label"], y, trainer.params)
+    _, valid_edges, test_edges = label_edges
+    validy = trainer.test(valid_edges)
+    testy = trainer.test(test_edges)
+    write_result(valid_edges["label"], validy, test_edges["label"], testy, trainer.params)
 
 
 if __name__ == "__main__":

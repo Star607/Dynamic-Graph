@@ -13,7 +13,7 @@ from joblib import Parallel, delayed
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
-from experiment.adaptors import iterate_datasets
+from data_loader.data_util import load_data, load_split_edges, load_label_edges, _iterate_datasets as iterate_datasets
 from experiment.adaptors import run_node2vec, run_triad, run_htne, run_tnode, run_gta
 
 parser = argparse.ArgumentParser(
@@ -27,7 +27,7 @@ parser.add_argument("--dataset", type=str,
 parser.add_argument("--start", type=int, default=0, help="Datset start index.")
 parser.add_argument("--end", type=int, default=100,
                     help="Datset end index (exclusive).")
-parser.add_argument("--run", type=bool, default=False,
+parser.add_argument("--run", action="store_true", default=False,
                     help="Whether running embeddings.")
 parser.add_argument("--times", type=int, default=1,
                     help="Experiment repetition times.")
@@ -57,8 +57,9 @@ def set_logger():
 logger = set_logger()
 logger.info(args)
 
-data_dir = "/nfs/zty/Graph/ctdne_data/"
+data_dir = "/nfs/zty/Graph/format_data/"
 train_data_dir = "/nfs/zty/Graph/train_data/"
+valid_data_dir = "/nfs/zty/Graph/valid_data/"
 test_data_dir = "/nfs/zty/Graph/test_data/"
 
 
@@ -66,13 +67,13 @@ def load_embeddings(path, skiprows=0, sep=" "):
     df = pd.read_csv(path, skiprows=skiprows, sep=sep, header=None)
     # nodes = df[0]
     df[0] = df[0].astype("int64")
-    id2idx = {row[0]: index for index, row in df.iterrows()}
-    id2idx = defaultdict(lambda: 0, id2idx)
+    id2idx = {int(row[0]): index for index, row in df.iterrows()}
+    # id2idx = defaultdict(lambda: 0, id2idx)
     embs = df.loc[:, 1:].to_numpy()
     # print(embs.shape)
     assert(embs.shape[1] == 128)
     # Padding 0 row as embeddings all zero
-    embs = np.concatenate([np.zeros((1, 128)), embs])
+    # embs = np.concatenate([np.zeros((1, 128)), embs])
     return id2idx, embs
 
 
@@ -87,96 +88,85 @@ def iterate_times(method):
     return worker
 
 
+def id_map(edges, nodes):
+    train_edges, valid_edges, test_edges = edges
+    id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
+
+    def _f(edges):
+        edges["from_node_id"] = edges["from_node_id"].map(id2idx)
+        edges["to_node_id"] = edges["to_node_id"].map(id2idx)
+        return edges
+    return _f(train_edges), _f(valid_edges), _f(test_edges)
+
+
 @iterate_times
 def evaluate_node2vec(project_dir="/nfs/zty/Graph/0-node2vec/emb"):
-    fname, _ = iterate_datasets()
+    fname = iterate_datasets()
     fname = fname[args.start: args.end]
     if args.run:
         logger.info("Running {} embedding programs.".format("node2vec"))
         run_node2vec(dataset=args.dataset, n_jobs=args.n_jobs,
-                     start=args.start, end=args.end, times=args.times)
+                     fname=fname, start=args.start, end=args.end, times=args.times)
         logger.info("Done node2vec embedding.")
     else:
         logger.info("Use pretrained {} embeddings.".format("node2vec"))
     for name, p, q in product(fname, [0.25, 0.5, 1, 2, 4], [0.25, 0.5, 1, 2, 4]):
-        sname = name[:-4]
-        logger.info("dataset={}, p={:.2f}, q={:.2f}".format(sname, p, q))
-        # print(name, p, q)
-        train_path = os.path.join(train_data_dir, name)
-        train_edges = pd.read_csv(train_path)
-        test_path = os.path.join(test_data_dir, name)
-        test_edges = pd.read_csv(test_path)
+        logger.info("dataset={}, p={:.2f}, q={:.2f}".format(name, p, q))
+
+        edges, nodes = load_label_edges(dataset=name)
+        train_edges, valid_edges, test_edges = id_map(edges[0], nodes[0])
 
         fpath = "{}/{}-{p:.2f}-{q:.2f}.emb".format(
-            project_dir, sname, p=p, q=q)
+            project_dir, name, p=p, q=q)
         id2idx, embs = load_embeddings(fpath, skiprows=1)
         X_train = edge2tabular(train_edges, id2idx, embs)
         y_train = train_edges["label"]
+        X_valid = edge2tabular(valid_edges, id2idx, embs)
+        y_valid = valid_edges["label"]
         X_test = edge2tabular(test_edges, id2idx, embs)
         y_test = test_edges["label"]
         # print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
-        acc, f1, auc = lr_evaluate(X_train, y_train, X_test, y_test)
-        write_result(sname, "node2vec", {"p": p, "q": q}, (acc, f1, auc))
+        vauc, acc, f1, auc = lr_evaluate(X_train, y_train, X_valid, y_valid, X_test, y_test)
+        write_result(name, "node2vec", {"p": p, "q": q}, (vauc, acc, f1, auc))
     pass
 
 
 @iterate_times
 def evaluate_triad(project_dir="/nfs/zty/Graph/2-DynamicTriad/output"):
-    fname, _ = iterate_datasets(dataset=args.dataset)
+    fname = iterate_datasets(dataset=args.dataset)
     fname = fname[args.start: args.end]
     if args.run:
         logger.info("Running {} embedding programs.".format(args.method))
         run_triad(dataset=args.dataset, n_jobs=args.n_jobs,
-                  start=args.start, end=args.end, times=args.times)
+                  fname=fname, start=args.start, end=args.end, times=args.times)
         logger.info("Done training embedding.")
     else:
         logger.info("Use pretrained {} embeddings.".format(args.method))
     for name, stepsize in product(fname, [1, 4, 8]):
-        sname = name[:-4]
-        logger.info(sname)
-        # print(name)
-        edges = pd.read_csv(os.path.join(data_dir, name))
+        logger.info(name)
 
-        def tswrapper(tss, steps=32):
-            stride = len(tss) // steps
-            timeloc = [tss.iloc[i * stride] for i in range(steps)]
+        edgel, nodel = load_label_edges(dataset=name)
+        train_edges, valid_edges, test_edges = id_map(edgel[0], nodel[0])
 
-            def f(ts):
-                for i in range(steps):
-                    if ts < timeloc[i]:
-                        return max(i - 2, 0)
-                return max(steps - 2, 0)
-            return f
-        ts2step = tswrapper(edges["timestamp"], 32 // stepsize)
-        train_path = os.path.join(train_data_dir, name)
-        train_edges = pd.read_csv(train_path)
-        train_edges["step"] = train_edges["timestamp"].apply(ts2step)
-        test_path = os.path.join(test_data_dir, name)
-        test_edges = pd.read_csv(test_path)
-        test_edges["step"] = test_edges["timestamp"].apply(ts2step)
-
-        fdir = "{}/{}-{}/".format(project_dir, sname, stepsize)
-        # fdir = "{project_dir}/{sname}-{stepsize}/".format()
+        fdir = "{}/{}-{}/".format(project_dir, name, stepsize)
         step_embeds = [load_embeddings(fdir + f, skiprows=0)
                        for f in os.listdir(fdir)]
-
-        X_train = [edge2tabular(train_edges[train_edges["step"] == i],
-                                step_embeds[i][0], step_embeds[i][1]) for i in range(32 // stepsize)]
-        X_train = np.concatenate(X_train, axis=0)
+        id2idx, embeds = step_embeds[-1]
+        X_train = edge2tabular(train_edges, id2idx, embeds)
         y_train = train_edges["label"]
-        X_test = [edge2tabular(test_edges[test_edges["step"] == i],
-                               step_embeds[i][0], step_embeds[i][1]) for i in range(32 // stepsize)]
-        X_test = np.concatenate(X_test, axis=0)
+        X_valid = edge2tabular(valid_edges, id2idx, embeds)
+        y_valid = valid_edges["label"]
+        X_test = edge2tabular(test_edges, id2idx, embeds)
         y_test = test_edges["label"]
         # print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
-        acc, f1, auc = lr_evaluate(X_train, y_train, X_test, y_test)
-        write_result(sname, "triad", {"beta_1": 0.1,
-                                      "beta_2": 0.1, "stepsize": stepsize}, (acc, f1, auc))
+        vauc, acc, f1, auc = lr_evaluate(X_train, y_train, X_valid, y_valid, X_test, y_test)
+        write_result(name, "triad", {"beta_1": 0.1,
+                                     "beta_2": 0.1, "stepsize": stepsize}, (vauc, acc, f1, auc))
 
 
 @iterate_times
 def evaluate_tnode():
-    fname, _ = iterate_datasets(dataset=args.dataset)
+    fname = iterate_datasets(dataset=args.dataset)
     fname = fname[args.start: args.end]
     logger.info("Running {} embedding programs.".format(args.method))
     run_tnode(dataset=args.dataset, n_jobs=args.n_jobs,
@@ -226,42 +216,44 @@ def evaluate_ctdne(project_dir="/nfs/zty/Graph/Dynamic-Graph/ctdne_output"):
 
 
 def edge2tabular(edges, id2idx, embs):
-    unseen_from_nodes = set(edges["from_idx"]) - set(id2idx.keys())
-    unseen_to_nodes = set(edges["to_idx"]) - set(id2idx.keys())
+    unseen_from_nodes = set(edges["from_node_id"]) - set(id2idx.keys())
+    unseen_to_nodes = set(edges["to_node_id"]) - set(id2idx.keys())
     logger.info("{} unseen from_nodes, {} unseen to_nodes in id2idx.".format(
         len(unseen_from_nodes), len(unseen_to_nodes)))
 
-    edges["from_idx"] = edges["from_idx"].map(id2idx)
-    edges["to_idx"] = edges["to_idx"].map(id2idx).astype('int64')
+    edges["from_node_id"] = edges["from_node_id"].map(id2idx)
+    edges["to_node_id"] = edges["to_node_id"].map(id2idx).astype('int64')
     # print(edges.dtypes)
     X = np.zeros((len(edges), 2 * embs.shape[1]))
-    X_from = embs[edges["from_idx"]]
-    X_to = embs[edges["to_idx"]]
+    X_from = embs[edges["from_node_id"]]
+    X_to = embs[edges["to_node_id"]]
     return np.concatenate((X_from, X_to), axis=1)
 
 
-def lr_evaluate(X_train, y_train, X_test, y_test):
+def lr_evaluate(X_train, y_train, X_valid, y_valid, X_test, y_test):
     clf = LogisticRegression(random_state=42).fit(X_train, y_train)
+    yp_valid = clf.predict_proba(X_valid)[:, 1]
     y_prob = clf.predict_proba(X_test)[:, 1]
     y_pred = clf.predict(X_test)
+    vauc = roc_auc_score(y_valid, yp_valid)
     acc = accuracy_score(y_test, y_pred)
     f1 = f1_score(y_test, y_pred)
     auc = roc_auc_score(y_test, y_prob)
-    return acc, f1, auc
+    return vauc, acc, f1, auc
 
 
 def write_result(dataset, method, params, metrics, result_dir="/nfs/zty/Graph/Dynamic-Graph/comp_results"):
-    acc, f1, auc = metrics
+    val_auc, acc, f1, auc = metrics
     res_path = "{}/{}-{}.csv".format(result_dir, dataset, args.method)
-    headers = ["method", "dataset", "accuracy", "f1", "auc", "params"]
+    headers = ["method", "dataset", "valid_auc", "accuracy", "f1", "auc", "params"]
     if not os.path.exists(res_path):
         f = open(res_path, 'w+')
         f.write(",".join(headers) + "\r\n")
         f.close()
         os.chmod(res_path, 0o777)
     with open(res_path, 'a') as f:
-        result_str = "{},{},{:.4f},{:.4f},{:.4f}".format(
-            method, dataset, acc, f1, auc)
+        result_str = "{},{},{:.4f},{:.4f},{:.4f},{:.4f}".format(
+            method, dataset, val_auc, acc, f1, auc)
         params_str = ",".join(["{}={}".format(k, v)
                                for k, v in params.items()])
         params_str = "\"{}\"".format(params_str)
@@ -279,7 +271,7 @@ def evaluate_gta():
 
 @iterate_times
 def evaluate_tgat():
-    fname, _ = iterate_datasets(dataset=args.dataset)
+    fname = iterate_datasets(dataset=args.dataset)
     fname = fname[args.start: args.end]
     if args.run:
         for name in fname:
@@ -288,8 +280,7 @@ def evaluate_tgat():
 
 @iterate_times
 def evaluate_sage():
-    fname, _ = iterate_datasets()
-    fname = [name[:-4] for name in fname[args.start:args.end]]
+    fname = iterate_datasets()
     os.chdir("/nfs/zty/Graph/Dynamic-Graph")
     cmd = "python -m experiment.graphsage --dataset {dataset} --epochs 50 --dropout 0.2 --weight_decay 1e-5 --learning_rate=0.0001 --nodisplay "
     commands = [cmd.format(dataset=name) for name in fname]

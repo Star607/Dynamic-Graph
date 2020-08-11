@@ -1,26 +1,11 @@
+from collections import defaultdict
 import numpy as np
 import pandas as pd
 import os
 from itertools import product
 from joblib import Parallel, delayed
 import subprocess
-
-
-def iterate_datasets(dataset="all", project_dir="/nfs/zty/Graph/"):
-    fname = os.listdir(os.path.join(project_dir, "train_data"))
-    fpath = [os.path.join(project_dir, "train_data/{}".format(f))
-             for f in fname]
-    lines = [len(open(f, "r").readlines()) for f in fpath]
-    # sort the dataset by train data size
-    forder = [f for l, f in sorted(zip(lines, fname))]
-    fpath = [os.path.join(project_dir, "train_data/{}".format(f))
-             for f in forder]
-    if dataset != "all":
-        forder = [name for name, file in zip(
-            forder, fpath) if name[:-4] == dataset]
-        fpath = [file for name, file in zip(
-            forder, fpath) if name[:-4] == dataset]
-    return forder, fpath
+from data_loader.data_util import load_data, load_split_edges,  _iterate_datasets as iterate_datasets
 
 
 def run_node2vec(dataset="all", n_jobs=16, project_dir="/nfs/zty/Graph/0-node2vec/", **kwargs):
@@ -31,17 +16,19 @@ def run_node2vec(dataset="all", n_jobs=16, project_dir="/nfs/zty/Graph/0-node2ve
     # output format:
     # first line: num_of_nodes dim_of_representation
     # node_id dim1 dim2 ... dimd
-    fname, fpath = iterate_datasets(dataset=dataset)
+    fname = kwargs["fname"]
     command = "python {project_dir}/src/main.py --input {input} --output {output}.emb --p {p} --q {q}"
     commands = []
-    for name, file in zip(fname, fpath):
-        name = name[:-4]
+    for name in fname:
         input_path = os.path.join(project_dir, "graph/{}.csv".format(name))
         output_path = os.path.join(project_dir, "emb/{}".format(name))
         if not os.path.exists(input_path):
-            df = pd.read_csv(file)
-            df = df[["from_idx", "to_idx"]]
-            df.to_csv(input_path, index=None, header=None, sep=" ")
+            edges, nodes = load_data(dataset=name, mode="train")[0]
+            id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
+            edges["from_node_id"] = edges["from_node_id"].map(id2idx)
+            edges["to_node_id"] = edges["to_node_id"].map(id2idx)
+            edges = edges[["from_node_id", "to_node_id"]]
+            edges.to_csv(input_path, index=None, header=None, sep=" ")
 
         for p, q in product([0.25, 0.5, 1, 2, 4], [0.25, 0.5, 1, 2, 4]):
             opath = "{}-{p:.2f}-{q:.2f}".format(output_path, p=p, q=q)
@@ -64,22 +51,17 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
     # equally divided into 32 snapshots
     def edges2adj(df, nodes):
         # df: DataFrame, nodes: dict(node_name, list)
-        rdf = df[["to_idx", "from_idx", "timestamp"]]
-        rdf.columns = ["from_idx", "to_idx", "timestamp"]
+        rdf = df[["to_node_id", "from_node_id", "timestamp"]]
+        rdf.columns = ["from_node_id", "to_node_id", "timestamp"]
         df = pd.concat([df, rdf], sort=True).sort_values(
             by="timestamp").reset_index(drop=True)
         adj_ids = {nid: [] for nid in nodes}
         adj_cnt = {nid: [] for nid in nodes}
-        for name, group in df.groupby("from_idx"):
-            vals = group["to_idx"].value_counts().keys().tolist()
-            cnts = group["to_idx"].value_counts().tolist()
+        for name, group in df.groupby("from_node_id"):
+            vals = group["to_node_id"].value_counts().keys().tolist()
+            cnts = group["to_node_id"].value_counts().tolist()
             adj_ids[name].extend(vals)
             adj_cnt[name].extend(cnts)
-        # for name, group in df.groupby("to_node_id"):
-        #     vals = group["from_node_id"].value_counts().keys().tolist()
-        #     cnts = group["from_node_id"].value_counts().tolist()
-        #     adj_ids[name].extend(vals)
-        #     adj_cnt[name].extend(cnts)
         return adj_ids, adj_cnt
 
     def write_adj(input_dir, i, adj_ids, adj_cnt):
@@ -96,19 +78,19 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
             file.write(line)
         file.close()
 
-    fname, fpath = iterate_datasets(dataset=dataset)
-    fname = fname[kwargs["start"]: kwargs["end"]]
-    fpath = fpath[kwargs["start"]: kwargs["end"]]
+    fname = kwargs["fname"]
     command = "python {project_dir} -n {timestep} -d {input_dir} -o {output_dir} -l {stepsize} -s {stepsize} --beta-smooth {b_1} --beta-triad {b_2} -K 128 --cachefn cache"
     commands = []
-    for name, file in zip(fname, fpath):
-        name = name[:-4]
+    for name in fname:
         input_dir = os.path.join(project_dir, "data/{}".format(name))
         if not os.path.exists(input_dir):
             os.makedirs(input_dir)
-            df = pd.read_csv(file)
+            df, nodes = load_data(dataset=name, mode="train")[0]
+            id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
+            df["from_node_id"] = df["from_node_id"].map(id2idx)
+            df["to_node_id"] = df["to_node_id"].map(id2idx)
 
-            nodes = set(df["from_idx"]).union(df["to_idx"])
+            nodes = set(id2idx.values())
             stride = len(df) // 32
             adjs = [edges2adj(df.iloc[i*stride:(i+1)*stride], nodes)
                     for i in range(32)]
@@ -154,11 +136,11 @@ def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=16, **k
 
 
 def run_tnode(dataset="all", project_dir="/nfs/zty/Graph/5-tNodeEmbed/", n_jobs=16, **kwargs):
-    fname, fpath = iterate_datasets(dataset=dataset)
+    fname = iterate_datasets(dataset=dataset)
     fname = fname[kwargs["start"]: kwargs["end"]]
     command = "python {project_dir}/src/main.py -d {dataset} -n {nstep}"
     commands = []
-    for name, nstep in product(fname, [32]):
+    for name, nstep in product(fname, [128, 32, 8]):
         name = name[:-4]
         dump_foler = os.path.join(project_dir, "data/{}".format(name))
         if not os.path.exists(dump_foler):
@@ -172,10 +154,9 @@ def run_tnode(dataset="all", project_dir="/nfs/zty/Graph/5-tNodeEmbed/", n_jobs=
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
 
-def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=1, **kwargs):
+def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=4, **kwargs):
     start, end = kwargs["start"], kwargs["end"]
-    fname, _ = iterate_datasets(dataset=dataset)
-    fname = [name[:-4] for name in fname[start:end]]
+    fname = iterate_datasets(dataset=dataset)[start: end]
     os.chdir(project_dir)
 
     command = "python main.py --dataset {dataset} --epochs 50 --dropout 0.2 --weight_decay 1e-5 --learning_rate=0.0001 --nodisplay "
@@ -183,26 +164,26 @@ def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=1
     comps = []
     for name in fname:
         cmd = command.format(dataset=name)
-        # commands.append(cmd)
+        commands.append(cmd)
         commands.append(cmd + " --nodynamic_neighbor")
         commands.append(cmd + " --sampler temporal")
-        # commands.append(
-        # cmd + " --sampler mask --use_context --context_size 10")
-        # commands.append(
-        #     cmd + " --sampler temporal --use_context --context_size 10")
-        commands.append(
-            cmd + " --sampler temporal --use_context --context_size 1")
-        commands.append(
-            cmd + " --sampler temporal --use_context --context_size 5")
+
         commands.append(
             cmd + " --sampler temporal --use_context --context_size 20")
         commands.append(
-            cmd + " --sampler mask --use_context --context_size 1")
+            cmd + " --sampler temporal --use_context --context_size 40")
         commands.append(
-            cmd + " --sampler mask --use_context --context_size 5")
+            cmd + " --sampler temporal --use_context --context_size 80")
+        commands.append(
+            cmd + " --sampler temporal --use_context --context_size 160")
         commands.append(
             cmd + " --sampler mask --use_context --context_size 20")
-        # comps.append(cmd + " --sampler mask --use_context --context_size 20")
+        commands.append(
+            cmd + " --sampler mask --use_context --context_size 40")
+        commands.append(
+            cmd + " --sampler mask --use_context --context_size 80")
+        commands.append(
+            cmd + " --sampler mask --use_context --context_size 160")
     # comps = repeat_string(comps)
     # commands = repeat_string(commands, times=1)
     print("Preprocessing finished.")
