@@ -14,7 +14,7 @@ import tensorflow as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K  # pylint: disable=import-error
 from data_loader.neigh_samplers import UniformNeighborSampler, MaskNeighborSampler, TemporalNeighborSampler
-from data_loader.data_util import load_data
+from data_loader.data_util import load_data, load_split_edges
 
 
 flags = tf.app.flags
@@ -41,20 +41,26 @@ class TemporalEdgeBatchIterator(object):
                  batch_size=128, context_size=20, max_degree=100, neg_sample_size=1, **kwargs):
         """Nodes is padded with a dummy node: 0, neg_samples are implemented in models.
         """
-        edges, train_nums, val_nums = self.test_unseen_nodes_prune(edges,
-                                                                   val_ratio, test_ratio)
+        # edges, train_nums, val_nums = self.test_unseen_nodes_prune(edges,
+        #                                                            val_ratio, test_ratio)
+        train_nums, val_nums = len(edges[0]), len(edges[1])
+        edges = pd.concat(edges)  # train_edges, valid_edges, test_edges
 
         self.eps = 1e-7
         # id start from 1, avoiding collides with the dummy node 0
         self.id2idx = {row["node_id"]:  row["id_map"]
                        for index, row in nodes.iterrows()}
+        if 0 in self.id2idx.values():
+            for k, v in self.id2idx.items():
+                self.id2idx[k] = v + 1  # shift all ids by adding 1
         self.id2idx["padding_node"] = 0
         self.bipartite = len(nodes["role"].unique()) > 1
         self.n_users = 1
         if self.bipartite:
             self.n_users += sum(nodes["role"] == "user")
 
-        edges_full = self._node_prune(edges)
+        # edges_full = self._node_prune(edges)
+        edges_full = edges
         edges_full["from_node_id"] = edges_full["from_node_id"].map(
             self.id2idx)
         edges_full["to_node_id"] = edges_full["to_node_id"].map(self.id2idx)
