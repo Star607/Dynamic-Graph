@@ -1,3 +1,4 @@
+import dgl
 import time
 import numpy as np
 from scipy.sparse import csr_matrix
@@ -9,12 +10,38 @@ from data_loader.minibatch import TemporalEdgeBatchIterator
 
 
 class SparseEdgeBatchIterator(TemporalEdgeBatchIterator):
-    def __init__(self, **kwargs):
-        # reuse super class initialization method
-        super().__init__(**kwargs)
+    def __init__(self, edges, nodes, val_ratio, test_ratio, neg_sample_size, remove_unseen_nodes=True, **kwargs):
+        self.eps = 1e-7
+        # padding zero node and a self-loop edge
+        edges, nodes = self._reindex_node(edges, nodes)
+        self.id2idx = {row["node_id"]: row["id_map"] for i, row in nodes.iterrows()}
+        self.graph = dgl.DGLGraph((edges["from_node_id"], edges["to_node_id"]))
+        self.graph.edata["timestamp"] = edges["timestamp"]
+        if remove_unseen_nodes:
+            edges, train_nums, val_nums = self._remove_unseen_nodes(edges, val_ratio, test_ratio)
+        else:
+            train_nums = int(len(edges) * 1 - val_ratio - test_ratio)
+            val_nums = int(len(edges) * val_ratio)
         # overwrite adjacency list by csr_matrix
         self.adj_ids, self.adj_tss, self.degrees = self.construct_adj(
             self.edges)
+
+    def _reindex_node(self, edges, nodes):
+        nodeset = set(edges["from_node_id"]).union(set(edges["to_node_id"]))
+        assert len(set(nodes["node_id"])) == len(nodeset) and np.all(
+            [n in nodeset for n in nodes])  # check node existence
+        ids = set(nodes["id_map"])
+        assert len(ids) == len(nodes)  # check non-repeated node ids
+        if max(ids) - min(ids) + 1 > len(ids):  # ids not consecutive
+            ids = sorted(ids)
+            id_remap = {imap: idx for idx, imap in enumerate(ids)}
+            nodes["id_map"] = nodes["id_map"].map(id_remap)
+        ids = set(nodes["id_map"])
+        assert max(ids) - min(ids) + 1 == len(ids)  # check id consecutive
+        return edges, nodes
+
+    def _remove_unseen_nodes(self, edges, val_ratio, test_ratio):
+        pass
 
     def construct_adj(self, edges):
         r"""Construct truncated adjacency list and each entry is sorted in temporal order except padding zeros.
@@ -26,7 +53,7 @@ class SparseEdgeBatchIterator(TemporalEdgeBatchIterator):
         Return:
         --------
         adj_ids : csr_matrix of adjacency list, each row stores the temporal neighbors of each node_id, with neighbours sorted by timestamp ascendingly.
-        adj_tss : csr_matrix of adjacency list timestamps. 
+        adj_tss : csr_matrix of adjacency list timestamps.
         """
         eid2aid = np.array(
             (len(edges), 2))  # change edge index to adjacency list index
