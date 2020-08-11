@@ -10,6 +10,7 @@ from .inits import glorot, zeros
 from .layers import Layer, Dense
 from .models import GeneralizedModel
 from .prediction import BipartiteEdgePredLayer
+from .utils import timeit
 from data_loader.minibatch import TemporalNeighborSampler
 
 # SAGEInfo is a namedtuple that specifies the parameters
@@ -22,16 +23,6 @@ SAGEInfo = namedtuple("SAGEInfo",
                        ])
 flags = tf.app.flags
 FLAGS = flags.FLAGS
-
-
-def timeit(method):
-    def timed(*args, **kw):
-        ts = time.time()
-        result = method(*args, **kw)
-        te = time.time()
-        print("%r  %2.2f s" % (method.__name__, te - ts))
-        return result
-    return timed
 
 
 def repeat_vector(vec, times):

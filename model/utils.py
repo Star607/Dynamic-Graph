@@ -1,6 +1,9 @@
 import numpy as np
 import random
 import gpustat
+import time
+import os
+import logging
 # Utility function and class
 
 
@@ -53,3 +56,13 @@ def get_free_gpu():
     bestGPU = max(pairs, key=lambda x: x[1])[0]
     print("setGPU: Setting GPU to: {}".format(bestGPU))
     return str(bestGPU)
+
+
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+        print("%r  %2.2f s" % (method.__name__, te - ts))
+        return result
+    return timed

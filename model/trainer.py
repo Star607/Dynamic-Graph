@@ -126,8 +126,8 @@ class ModelTrainer():
 
                 batch_bar.update()
                 batch_bar.set_postfix(loss=loss, auc=auc)
-                self.summary_writer.add_summary(
-                    outs[0], epoch * batch_num + self.batch.batch_num)
+                # self.summary_writer.add_summary(
+                #     outs[0], epoch * batch_num + self.batch.batch_num)
 
     def valid(self):
         placeholders = self.placeholders
