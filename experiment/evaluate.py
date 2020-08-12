@@ -14,7 +14,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 from data_loader.data_util import load_data, load_split_edges, load_label_edges, _iterate_datasets as iterate_datasets
-from experiment.adaptors import run_node2vec, run_triad, run_htne, run_tnode, run_gta
+from experiment.adaptors import run_node2vec, run_triad, run_htne, run_tnode, run_gta, run_ctdne
 
 parser = argparse.ArgumentParser(
     description="Perform contrastive experiments.")
@@ -175,44 +175,65 @@ def evaluate_tnode():
 
 
 @iterate_times
-def evaluate_ctdne(project_dir="/nfs/zty/Graph/Dynamic-Graph/ctdne_output"):
-    from .ctdne import ctdne
-    fname, _ = iterate_datasets(dataset=args.dataset)
+def evaluate_ctdne(project_dir="/nfs/zty/Graph/Dynamic-Graph/ctdne_embs"):
+    fname = iterate_datasets(dataset=args.dataset)
     fname = fname[args.start: args.end]
     if args.run:
         logger.info("Running {} embedding programs.".format(args.method))
         Parallel(n_jobs=args.n_jobs)(
-            delayed(ctdne)(name[:-4]) for name in fname)
+            delayed(run_ctdne)(fname=[name]) for name in fname)
         logger.info("Done {} embeddings.".format(args.method))
     for name in fname:
-        sname = name[:-4]
         logger.info(
-            "dataset={}, num_walk=10, walk_length=80, context_window=10".format(sname))
-        # print(name, p, q)
-        train_path = os.path.join(train_data_dir, name)
-        train_edges = pd.read_csv(train_path)
-        test_path = os.path.join(test_data_dir, name)
-        test_edges = pd.read_csv(test_path)
+            "dataset={}, num_walk=10, walk_length=80, context_window=10".format(name))
 
-        fpath = "{}/{}.emb".format(project_dir, sname)
-        id2idx, embs = load_embeddings(fpath, skiprows=0, sep=",")
-        # TemporalRandomWalk loses many nodes, so we remove unseen nodes from train_edges.
-        from_mask = train_edges["from_idx"].apply(lambda s: s in id2idx.keys())
-        to_mask = train_edges["to_idx"].apply(lambda s: s in id2idx.keys())
-        mask = np.logical_and(from_mask, to_mask)
-        if sum(mask) > 1:
-            logger.info(
-                "{} {} edges removed from train edges.".format(sname, len(mask)))
-            train_edges = train_edges[mask].reset_index(drop=True)
+        fpath = "{}/{}.emb".format(project_dir, name)
+        id2idx, embeds = load_embeddings(fpath, skiprows=0, sep=" ")
 
-        X_train = edge2tabular(train_edges, id2idx, embs)
+        edgel, nodel = load_label_edges(dataset=name)
+        train_edges, valid_edges, test_edges = id_map(edgel[0], nodel[0])
+
+        X_train = edge2tabular(train_edges, id2idx, embeds)
         y_train = train_edges["label"]
-        X_test = edge2tabular(test_edges, id2idx, embs)
+        X_valid = edge2tabular(valid_edges, id2idx, embeds)
+        y_valid = valid_edges["label"]
+        X_test = edge2tabular(test_edges, id2idx, embeds)
         y_test = test_edges["label"]
         # print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
-        acc, f1, auc = lr_evaluate(X_train, y_train, X_test, y_test)
-        write_result(sname, "ctdne", {
-                     "num_walk": 10, "walk_length": 80, "context_window": 10}, (acc, f1, auc))
+        vauc, acc, f1, auc = lr_evaluate(X_train, y_train, X_valid, y_valid, X_test, y_test)
+        write_result(name, "ctdne", {
+                     "num_walk": 10, "walk_length": 80, "context_window": 10}, (vauc, acc, f1, auc))
+
+
+@iterate_times
+def evaluate_htne(project_dir="/nfs/zty/Graph/4-htne/emb"):
+    fname = iterate_datasets(dataset=args.dataset)
+    fname = fname[args.start: args.end]
+    if args.run:
+        logger.info("Running {} embedding programs.".format(args.method))
+        run_htne(dataset=args.dataset, n_jobs=args.n_jobs, fname=fname)
+        logger.info("Done training embedding.")
+    else:
+        logger.info("Use pretrained {} embeddings.".format(args.method))
+
+    for name in fname:
+        logger.info(name)
+
+        edgel, nodel = load_label_edges(dataset=name)
+        train_edges, valid_edges, test_edges = id_map(edgel[0], nodel[0])
+
+        for hist_len in [3, 4, 5]:
+            fpath = "{}/{}.emb{}".format(project_dir, name, hist_len)
+            id2idx, embeds = load_embeddings(fpath, skiprows=1, sep=" ")
+            X_train = edge2tabular(train_edges, id2idx, embeds)
+            y_train = train_edges["label"]
+            X_valid = edge2tabular(valid_edges, id2idx, embeds)
+            y_valid = valid_edges["label"]
+            X_test = edge2tabular(test_edges, id2idx, embeds)
+            y_test = test_edges["label"]
+            # print(X_train.shape, y_train.shape, X_test.shape, y_test.shape)
+            vauc, acc, f1, auc = lr_evaluate(X_train, y_train, X_valid, y_valid, X_test, y_test)
+            write_result(name, "htne", {"hist_len": hist_len, "epoch": 50}, (vauc, acc, f1, auc))
 
 
 def edge2tabular(edges, id2idx, embs):
@@ -301,6 +322,8 @@ if __name__ == "__main__":
         evaluate = evaluate_gta
     elif args.method == "sage":
         evaluate = evaluate_sage
+    elif args.method == "htne":
+        evaluate = evaluate_htne
     else:
         raise NotImplementedError(
             "Method {} not implemented!".format(args.method))

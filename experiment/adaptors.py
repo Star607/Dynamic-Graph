@@ -6,6 +6,7 @@ from itertools import product
 from joblib import Parallel, delayed
 import subprocess
 from data_loader.data_util import load_data, load_split_edges,  _iterate_datasets as iterate_datasets
+import networkx as nx
 
 
 def run_node2vec(dataset="all", n_jobs=16, project_dir="/nfs/zty/Graph/0-node2vec/", **kwargs):
@@ -112,25 +113,26 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
 
-def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=16, **kwargs):
-    fname, fpath = iterate_datasets(dataset=dataset)
-    command = "python {project_dir}/HTNE.py -d {input_path} -o {output_path}"
+def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=4, **kwargs):
+    fname = iterate_datasets(dataset=dataset)
+    command = "python {project_dir}/HTNE.py -d {input_path} -o {output_path} --hist-len {hist_len}"
     commands = []
-    for name, file in zip(fname, fpath):
-        name = name[:-4]
-        input_path = os.path.join(project_dir, "data/{}.csv".format(name))
+    for name in fname:
+        input_path = os.path.join(project_dir, "data/{}.edges".format(name))
         if not os.path.exists(input_path):
-            df = pd.read_csv(os.path.join(
-                project_dir, "../train_data/{}.csv".format(name)))
-            # We ensure that the train, valid, and test data are already re-indexed during preprocessing. So HTNE can process these files directly.
+            df, nodes = load_data(dataset=name, mode="train")[0]
             df["timestamp"] = (df["timestamp"] - df["timestamp"].min()) / \
                 (df["timestamp"].max() - df["timestamp"].min())
-            df = df[df["label"] == 1]
+            id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
+            df["from_node_id"] = df["from_node_id"].map(id2idx)
+            df["to_node_id"] = df["to_node_id"].map(id2idx)
+            df = df[["from_node_id", "to_node_id", "timestamp"]]
             df.to_csv(input_path, index=None, header=None, sep=" ")
         output_path = os.path.join(project_dir, "emb/{}.emb".format(name))
-        if not os.path.exists(output_path):
+        for hist_len in [3, 4, 5]:
+            hist_path = output_path + str(hist_len)
             commands.append(command.format(project_dir=project_dir,
-                                           input_path=input_path, output_path=output_path))
+                                           input_path=input_path, output_path=hist_path, hist_len=hist_len))
     print("Preprocessing finished.")
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
 
@@ -189,6 +191,27 @@ def run_gta(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/", n_jobs=4
     print("Preprocessing finished.")
     # Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in comps)
     Parallel(n_jobs=n_jobs)(delayed(os.system)(cmd) for cmd in commands)
+
+
+def run_ctdne(dataset="all", project_dir="/nfs/zty/Graph/Dynamic-Graph/ctdne_embs/", n_jobs=4, **kwargs):
+    from CTDNE import CTDNE
+    fname = kwargs["fname"]
+    for name in fname:
+        edges, nodes = load_data(dataset=name, mode="train")[0]
+        id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
+        edges["from_node_id"] = edges["from_node_id"].map(id2idx)
+        edges["to_node_id"] = edges["to_node_id"].map(id2idx)
+        edges["time"] = edges["timestamp"]
+        mg = nx.from_pandas_edgelist(edges, "from_node_id", "to_node_id", "time", nx.MultiGraph)
+        CTDNE_model = CTDNE(mg, dimensions=128, workers=4)
+        model = CTDNE_model.fit()
+        wv = model.wv
+        vecs = np.array([wv[u] for u in wv.vocab])
+        df = pd.DataFrame(vecs, index=wv.vocab)
+        real_nodes = set([str(i) for i in id2idx.values()])
+        embed_nodes = set(wv.vocab.keys())
+        print("{} nodes not exist in embed_nodes.".format(len(real_nodes - embed_nodes)))
+        df.to_csv("{}/{}.emb".format(project_dir, name), header=None, sep=" ")
 
 
 def repeat_string(cmds, times=5):
