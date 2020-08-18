@@ -7,26 +7,21 @@ import sys
 import time
 
 import dgl
-import dgl.function as fn
-import dgl.nn.pytorch as dglnn
 from dgl.nn.pytorch.conv import SAGEConv
-from dgl.utils import expand_as_pair, check_eq_shape
-import networkx as nx
 import numpy as np
 import pandas as pd
 import scipy.sparse as ssp
 import torch
-import torch as th
 import torch.nn as nn
 from torch.nn import functional as F
 from tqdm import trange
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 from data_loader.data_util import load_data, load_split_edges, load_label_edges
-from model.utils import get_free_gpu, timeit
+from model.utils import get_free_gpu, timeit, EarlyStopMonitor
 from torch_model.util_dgl import set_logger, construct_dglgraph, padding_node, TSAGEConv
 from torch_model.layers import TemporalLinkLayer
+from torch_model.prepare_deg_indices import _prepare_deg_indices, _par_deg_indices, _deg_indices_full, _par_deg_indices_full
 # A cpp extension computing upper_bound along the last dimension of an non-decreasing matrix. It saves huge memory use.
 import upper_bound_cpp
 
@@ -93,10 +88,9 @@ def prepare_dataset(dataset):
         edges["from_node_id"] = edges["from_node_id"].map(id2idx)
         edges["to_node_id"] = edges["to_node_id"].map(id2idx)
         return edges
-    edges, train_labels,  val_labels, test_labels = [
-        _f(e) for e in [edges, train_labels,  val_labels, test_labels]]
+    edges, train_labels, val_labels, test_labels = [
+        _f(e) for e in [edges, train_labels, val_labels, test_labels]]
     tmax, tmin = edges["timestamp"].max(), edges["timestamp"].min()
-    # scaler = MinMaxScaler().fit(edges["timestamp"])
     def scaler(s): return (s - tmin) / (tmax - tmin)
     edges["timestamp"] = scaler(edges["timestamp"])
     val_labels["timestamp"] = scaler(val_labels["timestamp"])
@@ -104,88 +98,16 @@ def prepare_dataset(dataset):
     return nodes, edges, train_labels, val_labels, test_labels
 
 
-@timeit
-def _prepare_deg_indices(g):
-    """Compute on CPU devices."""
-    def _group_func_wrapper(groupby):
-        def _compute_deg_indices(edges):
-            buc, deg, dim = edges.src["nfeat"].shape
-            t = edges.data["timestamp"].view(buc, deg, 1)
-            # It doesn't change the behavior but saves to the 1/deg memory use.
-            indices = upper_bound_cpp.upper_bound(t.squeeze(-1)).add_(-1)
-            # indices = (t.permute(0, 2, 1) <= t).sum(dim=-1).add_(-1)
-            # assert torch.all(torch.eq(another_indices, indices))
-            return {f"{groupby}_deg_indices": indices}
-        return _compute_deg_indices
-    g = g.local_var()
-    g.edata["timestamp"] = g.edata["timestamp"].cpu()
-
-    src_deg_indices = _group_func_wrapper(groupby="src")
-    dst_deg_indices = _group_func_wrapper(groupby="dst")
-    g.group_apply_edges(group_by="src", func=src_deg_indices)
-    g.group_apply_edges(group_by="dst", func=dst_deg_indices)
-    return {"src_deg_indices": g.edata["src_deg_indices"],
-            "dst_deg_indices": g.edata["dst_deg_indices"]}
-
-
-@timeit
-def _par_deg_indices(g):
-    """Compute on CPU devices."""
-    def _group_func_wrapper(groupby):
-        def _compute_deg_indices(edges):
-            buc, deg, dim = edges.src["nfeat"].shape
-            t = edges.data["timestamp"].view(buc, deg, 1)
-            # It doesn't change the behavior but saves to the 1/deg memory use.
-            indices = upper_bound_cpp.upper_bound_par(t.squeeze(-1)).add_(-1)
-            # indices = (t.permute(0, 2, 1) <= t).sum(dim=-1).add_(-1)
-            # assert torch.all(torch.eq(another_indices, indices))
-            return {f"{groupby}_deg_indices": indices}
-        return _compute_deg_indices
-    g = g.local_var()
-    g.edata["timestamp"] = g.edata["timestamp"].cpu()
-
-    src_deg_indices = _group_func_wrapper(groupby="src")
-    dst_deg_indices = _group_func_wrapper(groupby="dst")
-    g.group_apply_edges(group_by="src", func=src_deg_indices)
-    g.group_apply_edges(group_by="dst", func=dst_deg_indices)
-    return {"src_deg_indices": g.edata["src_deg_indices"],
-            "dst_deg_indices": g.edata["dst_deg_indices"]}
-
-
-@timeit
-def _deg_indices_full(g):
-    u, v, eids = g.out_edges(g.nodes(), 'all')
-    etime = g.edata["timestamp"][eids].cpu()
-    degs = g.out_degrees()
-    src_deg_indices = upper_bound_cpp.upper_bound_full(u, etime, degs)
-    # eids is a permutation of torch.arange(g.number_of_edges())
-    # we can reverse the permutation by torch.argsort: eids[torch.argsort(eids)] == torch.arange(g.numer_of_edges())
-    src_deg_indices = src_deg_indices[torch.argsort(eids)]
-    u, v, eids = g.in_edges(g.nodes(), 'all')
-    etime = g.edata["timestamp"][eids].cpu()
-    degs = g.out_degrees()
-    dst_deg_indices = upper_bound_cpp.upper_bound_full(v, etime, degs)
-    dst_deg_indices = dst_deg_indices[torch.argsort(eids)]
-    return {"src_deg_indices": src_deg_indices.add_(-1),
-            "dst_deg_indices": dst_deg_indices.add(-1)}
-
-
-@timeit
-def _par_deg_indices_full(g):
-    u, v, eids = g.out_edges(g.nodes(), 'all')
-    etime = g.edata["timestamp"][eids].cpu()
-    degs = g.out_degrees()
-    src_deg_indices = upper_bound_cpp.upper_bound_full_par(u, etime, degs)
-    # eids is a permutation of torch.arange(g.number_of_edges())
-    # we can reverse the permutation by torch.argsort: eids[torch.argsort(eids)] == torch.arange(g.numer_of_edges())
-    src_deg_indices = src_deg_indices[torch.argsort(eids)]
-    u, v, eids = g.in_edges(g.nodes(), 'all')
-    etime = g.edata["timestamp"][eids].cpu()
-    degs = g.out_degrees()
-    dst_deg_indices = upper_bound_cpp.upper_bound_full_par(v, etime, degs)
-    dst_deg_indices = dst_deg_indices[torch.argsort(eids)]
-    return {"src_deg_indices": src_deg_indices.add_(-1),
-            "dst_deg_indices": dst_deg_indices.add(-1)}
+def _check_extension_correct(g):
+    for _ in range(3):
+        deg_indices = _prepare_deg_indices(g)
+        par_deg_indices = _par_deg_indices(g)
+        full_deg_indices = _deg_indices_full(g)
+        par_full_deg_indices = _par_deg_indices_full(g)
+        for key in deg_indices.keys():
+            assert torch.equal(deg_indices[key], par_deg_indices[key]), key
+            assert torch.equal(deg_indices[key], full_deg_indices[key]), key
+            assert torch.equal(deg_indices[key], par_full_deg_indices[key]), key
 
 
 def _df2np(edges):
@@ -213,18 +135,7 @@ def main():
     else:
         device = torch.device("cpu")
     g = construct_dglgraph(edges, nodes, device, bidirected=args.bidirected)
-    for _ in range(3):
-        deg_indices = _prepare_deg_indices(g)
-        par_deg_indices = _par_deg_indices(g)
-        full_deg_indices = _deg_indices_full(g)
-        par_full_deg_indices = _par_deg_indices_full(g)
-        for key in deg_indices.keys():
-            assert torch.equal(deg_indices[key], par_deg_indices[key]), key
-            assert torch.equal(deg_indices[key], full_deg_indices[key]), key
-            assert torch.equal(deg_indices[key], par_full_deg_indices[key]), key
-
-    exit(0)
-
+    deg_indices = _par_deg_indices_full(g)
     for k, v in deg_indices.items():
         g.edata[k] = v.to(device).unsqueeze(-1).detach()
 
@@ -232,7 +143,7 @@ def main():
                 torch.cuda.get_device_properties(device).total_memory // 2**30)
 
     in_feats = g.ndata["nfeat"].shape[-1]
-    out_feats = 128
+    out_feats = args.n_hidden
     n_edges = g.number_of_edges()
     model = TemporalLinkTrainer(in_feats, args)
     model = model.to(device)
