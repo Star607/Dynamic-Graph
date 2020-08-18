@@ -21,7 +21,6 @@ from torch.nn import functional as F
 from tqdm import trange
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
-from data_loader.minibatch import load_data
 from model.utils import get_free_gpu
 
 
@@ -244,8 +243,6 @@ def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
     else:
         nfeature = nn.Parameter(nn.init.xavier_normal_(
             torch.empty(len(nodes), node_dim, device=device)))
-        # nfeature = nn.Parameter(nn.init.xavier_uniform_(
-        #     torch.empty(len(nodes), node_dim, device=device)))
 
     if bidirected:
         # In this way, we repeat the edge one by one, remaining the increasing temporal order.
@@ -258,8 +255,8 @@ def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
     # We only add single directed edges, but treat them as undirected edges for representation. That is we store both source and destionation node representations at timestamp t on the same edge (s, d, t), assuming
     g = dgl.DGLGraph((src, dst))
     g.ndata["nfeat"] = nfeature  # .to(device)
-    g.edata["timestamp"] = etime  # .to(device)
-    g.edata["efeat"] = efeature  # .to(device)
+    g.edata["timestamp"] = etime.to(nfeature)  # .to(device)
+    g.edata["efeat"] = efeature.to(nfeature)  # .to(device)
     return g
 
 
