@@ -18,7 +18,7 @@ from tqdm import trange
 
 import upper_bound_cpp
 from torch_model.util_dgl import timeit
-from torch_model.prepare_deg_indices import LatestNodeInteractionFinder
+from torch_model.eid_precomputation import LatestNodeInteractionFinder
 
 
 class TemporalLinkLayer(nn.Module):
