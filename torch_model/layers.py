@@ -18,6 +18,7 @@ from tqdm import trange
 
 import upper_bound_cpp
 from torch_model.util_dgl import timeit
+from torch_model.prepare_deg_indices import LatestNodeInteractionFinder
 
 
 class TemporalLinkLayer(nn.Module):
@@ -97,26 +98,3 @@ class TemporalNodeLayer(nn.Module):
 
     def forward(self, g, nodes, bidirected=False):
         pass
-
-
-@timeit
-def LatestNodeInteractionFinder(g, u, t, mode="in"):
-    """for each `(u, t)`, find the latest in/out interaction of `u` in graph `g`.
-
-    Returns
-    ----------
-    eids : tensor
-    """
-    eids = torch.full((u.shape[0],), -1, dtype=torch.int64)
-    for i, (ui, ti) in enumerate(zip(u, t)):
-        if mode == "in":
-            edges = g.in_edges(ui, 'eid')
-        else:
-            edges = g.out_edges(ui, 'eid')
-        mask = g.edges[edges].data["timestamp"] < ti
-        eid = torch.where(mask)[0]
-        if eid.shape[0] > 0:
-            eids[i] = torch.max(eid)
-        else:
-            eids[i] = edges[0]
-    return eids

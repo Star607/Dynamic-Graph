@@ -87,3 +87,50 @@ def _par_deg_indices_full(g):
     dst_deg_indices = dst_deg_indices[torch.argsort(eids)]
     return {"src_deg_indices": src_deg_indices.add_(-1),
             "dst_deg_indices": dst_deg_indices.add(-1)}
+
+
+@timeit
+def _latest_edge(g, u, t, mode="in"):
+    # Assume the timestamp is non-descending for each node, otherwise the cpp extension will give wrong answers.
+    assert torch.all(t[1:] - t[:-1] >= 0), "Timestamp tensor is not non-descending."
+    sg = dgl.DGLGraph()
+    sg.add_nodes(g.number_of_nodes())
+    sg.add_edges(u, u)  # each edge represents a query for (u, t)
+    sg.edata["timestamp"] = t.cpu().clone().detach()
+
+    nodes = u.unique()
+    degs = g.in_degrees(nodes)
+    eids = g.in_edges(nodes, 'eid') if mode == "in" else g.out_edges(nodes, 'eid')
+    etime = g.edata["timestamp"][eids].to(sg.edata["timestamp"])
+
+    sdegs = sg.in_degrees(nodes)
+    seids = sg.in_edges(nodes, 'eid')
+    setime = sg.edata["timestamp"][seids]
+    refer_eids = upper_bound_cpp.refer_latest_edge(
+        nodes, degs, eids, etime, nodes, sdegs, seids, setime)
+    return refer_eids[torch.argsort(seids)]
+
+
+@timeit
+def LatestNodeInteractionFinder(g, u, t, mode="in"):
+    """for each `(u, t)`, find the latest in/out interaction of `u` in graph `g`.
+
+    Returns
+    ----------
+    eids : tensor
+    """
+    eids = torch.full((u.shape[0],), -1, dtype=torch.int64)
+    g = g.local_var()
+    # Attention! When `ts` is a float tensor, `ti` is a double scalar, `ts < ti` will cast `ti` to `float`, resulting in precision loss. So we use `ts.to(t)` in the first.
+    ts = g.edata["timestamp"].cpu().to(t)
+    for i, (ui, ti) in enumerate(zip(u, t)):
+        if mode == "in":
+            edges = g.in_edges(ui, 'eid')
+        else:
+            edges = g.out_edges(ui, 'eid')
+        mask = torch.where(ts[edges] < ti)[0]
+        if mask.shape[0] > 0:
+            eids[i] = torch.max(edges[mask])
+        else:
+            eids[i] = edges[0]
+    return eids
