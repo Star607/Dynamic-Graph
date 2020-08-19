@@ -25,7 +25,7 @@ parser.add_argument("--n_jobs", type=int, default=16,
 parser.add_argument("--dataset", type=str,
                     default="all", help="Specific dataset for experiments; default is all datasets.")
 parser.add_argument("--start", type=int, default=0, help="Datset start index.")
-parser.add_argument("--end", type=int, default=100,
+parser.add_argument("--end", type=int, default=14,
                     help="Datset end index (exclusive).")
 parser.add_argument("--run", action="store_true", default=False,
                     help="Whether running embeddings.")
