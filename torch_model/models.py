@@ -6,7 +6,7 @@ import os
 import sys
 import time
 
-import dgl
+import dgl  # import dgl after torch will cause `GLIBCXX_3.4.22` not found.
 from dgl.nn.pytorch.conv import SAGEConv
 import numpy as np
 import pandas as pd
@@ -20,8 +20,8 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from data_loader.data_util import load_data, load_split_edges, load_label_edges
 from model.utils import get_free_gpu, timeit, EarlyStopMonitor
 from torch_model.util_dgl import set_logger, construct_dglgraph, padding_node, TSAGEConv
-from torch_model.layers import TemporalLinkLayer
-from torch_model.prepare_deg_indices import _prepare_deg_indices, _par_deg_indices, _deg_indices_full, _par_deg_indices_full
+from torch_model.layers import TemporalLinkLayer, LatestNodeInteractionFinder
+from torch_model.eid_precomputation import _prepare_deg_indices, _par_deg_indices, _deg_indices_full, _par_deg_indices_full, _latest_edge, LatestNodeInteractionFinder
 # A cpp extension computing upper_bound along the last dimension of an non-decreasing matrix. It saves huge memory use.
 import upper_bound_cpp
 
@@ -98,7 +98,7 @@ def prepare_dataset(dataset):
     return nodes, edges, train_labels, val_labels, test_labels
 
 
-def _check_extension_correct(g):
+def _check_upper_bound_extension(g):
     for _ in range(3):
         deg_indices = _prepare_deg_indices(g)
         par_deg_indices = _par_deg_indices(g)
@@ -108,6 +108,20 @@ def _check_extension_correct(g):
             assert torch.equal(deg_indices[key], par_deg_indices[key]), key
             assert torch.equal(deg_indices[key], full_deg_indices[key]), key
             assert torch.equal(deg_indices[key], par_full_deg_indices[key]), key
+
+
+def _check_latest_edge_extension(g, edges):
+    u = torch.tensor(edges["from_node_id"])
+    v = torch.tensor(edges["to_node_id"])
+    t = torch.tensor(edges["timestamp"])
+    for _ in range(3):
+        pyeids = LatestNodeInteractionFinder(g, u, t, mode="in")
+        cppeids = _latest_edge(g, u, t, mode="in")
+        assert torch.equal(pyeids, cppeids)
+        pyeids = LatestNodeInteractionFinder(g, v, t, mode="out")
+        cppeids = _latest_edge(g, v, t, mode="out")
+        assert torch.equal(pyeids, cppeids)
+    pass
 
 
 def _df2np(edges):
@@ -123,6 +137,7 @@ def main():
     logger = set_logger()
     logger.info(args)
     nodes, edges, train_labels, val_labels, test_labels = prepare_dataset(args.dataset)
+
     delta = edges["timestamp"].shift(-1) - edges["timestamp"]
     # pandas loc[low:high] includes high
     assert np.all(delta[:len(delta) - 1] >= 0)
@@ -135,6 +150,8 @@ def main():
     else:
         device = torch.device("cpu")
     g = construct_dglgraph(edges, nodes, device, bidirected=args.bidirected)
+    _check_latest_edge_extension(g, train_labels)
+    exit(0)
     deg_indices = _par_deg_indices_full(g)
     for k, v in deg_indices.items():
         g.edata[k] = v.to(device).unsqueeze(-1).detach()
@@ -197,7 +214,7 @@ def parse_args():
                         help="For bipartite graphs, set this as False.")
     parser.add_argument("--bidirected", dest="bidirected", action="store_true",
                         help="For non-bipartite graphs, set this as True.")
-    parser.add_argument("--dropout", type=float, default=0.0,
+    parser.add_argument("--dropout", type=float, default=0.2,
                         help="dropout probability")
     parser.add_argument("--gpu", dest="gpu", action="store_true",
                         help="Whether use GPU.")
