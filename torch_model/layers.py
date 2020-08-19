@@ -1,24 +1,7 @@
-import argparse
-import itertools
-import logging
-import os
-import sys
-import time
-from datetime import datetime
-
-import dgl
-import networkx as nx
 import numpy as np
-import pandas as pd
-import scipy.sparse as ssp
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from tqdm import trange
-
-import upper_bound_cpp
-from torch_model.util_dgl import timeit
-from torch_model.eid_precomputation import LatestNodeInteractionFinder
 
 
 class TimeEncodingLayer(nn.Module):
@@ -134,9 +117,6 @@ class TSAGEConv(nn.Module):
     feat_drop : float
     aggregator_type : str
         Aggregator type to use (``mean``, ``gcn``, ``pool``, ``lstm``).
-    bias : bool
-    norm : callable activation function/layer or None, optional
-    activation : callable activation function/layer or None, optional
     """
 
     def __init__(self, in_feats, out_feats, aggregator_type, feat_drop=0.,
