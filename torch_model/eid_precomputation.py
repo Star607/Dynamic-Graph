@@ -91,8 +91,10 @@ def _par_deg_indices_full(g):
 
 @timeit
 def _latest_edge(g, u, t, mode="in"):
-    # Assume the timestamp is non-descending for each node, otherwise the cpp extension will give wrong answers.
-    assert torch.all(t[1:] - t[:-1] >= 0), "Timestamp tensor is not non-descending."
+    # Assume the timestamp is non-descending for each node, otherwise the cpp
+    # extension will give wrong answers.
+    assert torch.all(t[1:] - t[:-1] >=
+                     0), "Timestamp tensor is not non-descending."
     sg = dgl.DGLGraph()
     sg.add_nodes(g.number_of_nodes())
     sg.add_edges(u, u)  # each edge represents a query for (u, t)
@@ -100,7 +102,8 @@ def _latest_edge(g, u, t, mode="in"):
 
     nodes = u.unique()
     degs = g.in_degrees(nodes)
-    eids = g.in_edges(nodes, 'eid') if mode == "in" else g.out_edges(nodes, 'eid')
+    eids = g.in_edges(
+        nodes, 'eid') if mode == "in" else g.out_edges(nodes, 'eid')
     etime = g.edata["timestamp"][eids].to(sg.edata["timestamp"])
 
     sdegs = sg.in_degrees(nodes)

@@ -127,7 +127,8 @@ class TSAGEConv(SAGEConv):
             # mask = self.feat_drop(mask)
             # sum over all valid neighbors: (bucket_size, deg, dim)
             # mask_feat = torch.matmul(mask, h_neighs) / mask.sum(dim=-1, keepdim=True)
-            ts = edges.data["timestamp"].view(buc, deg, 1)  # (B, Deg, 1) if the last dimension is 1
+            # (B, Deg, 1) if the last dimension is 1
+            ts = edges.data["timestamp"].view(buc, deg, 1)
             # The mask matrix would crush out of CUDA memory. For the 58k degree node, it consumes 12GB memory.
             # mask = (ts.permute(0, 2, 1) <= ts).float()  # (B, Deg, Deg)
             # We assume the batch mechanism keeps stable during training.
@@ -138,7 +139,8 @@ class TSAGEConv(SAGEConv):
                 # mask_feat = torch.bmm(mask, h_neighs)
                 # mask_feat = mask_feat / mask.sum(dim=-1, keepdim=True)
                 # mean_cof = torch.arange(deg).add_(1.0).unsqueeze_(-1)
-                mean_cof = edges.data[f"{groupby}_deg_indices"].add(1.0).view(buc, deg, 1)
+                mean_cof = edges.data[f"{groupby}_deg_indices"].add(
+                    1.0).view(buc, deg, 1)
                 h_feat = h_neighs.cumsum(dim=1) / mean_cof
                 mask_feat = h_feat.gather(dim=1, index=indices)
             elif self._aggre_type == "gcn":
@@ -195,7 +197,8 @@ class TSAGEConv(SAGEConv):
         """
         graph = graph.local_var()
         # compute for gcn normalization
-        graph.ndata["deg"] = (graph.in_degrees() + graph.out_degrees()).to(graph.ndata["nfeat"])
+        graph.ndata["deg"] = (graph.in_degrees() +
+                              graph.out_degrees()).to(graph.ndata["nfeat"])
         if current_layer >= 2:
             src_feat = f'src_feat{current_layer - 1}'
             dst_feat = f'dst_feat{current_layer - 1}'
@@ -226,17 +229,23 @@ class GTRConv(nn.Module):
 
 
 def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
-    ''' Edges should be a pandas DataFrame, and its columns should be columns comprise of  from_node_id, to_node_id, timestamp, state_label, features_separated_by_comma. Here `state_label` varies in edge classification tasks.
+    ''' Edges should be a pandas DataFrame, and its columns should be columns
+    comprise of  from_node_id, to_node_id, timestamp, state_label, features_separated_by_comma.
+    Here `state_label` varies in edge classification tasks.
 
-    Nodes should be a pandas DataFrame, and its columns should be columns comprise of node_id, id_map, role, label, features_separated_by_comma.
+    Nodes should be a pandas DataFrame, and its columns should be columns comprise
+    of node_id, id_map, role, label, features_separated_by_comma.
 
-    By default, we use the single directional edges to store the bi-directional edge messages for memory reduction. If `bidirected` is set `True`, we add the inverse edges into the DGLGraph. In this case, we retain edges in the increasing temporal order.
+    By default, we use the single directional edges to store the bi-directional
+    edge messages for memory reduction. If `bidirected` is set `True`, we add
+    the inverse edges into the DGLGraph. In this case, we retain edges in the
+    increasing temporal order.
     '''
     src = edges["from_node_id"]
     dst = edges["to_node_id"]
     etime = torch.tensor(edges["timestamp"], device=device)
     efeature = torch.tensor(edges.iloc[:, 4:].to_numpy(), device=device) if len(
-        edges.columns) > 4 else torch.ones((len(edges), 1), device=device)
+        edges.columns) > 4 else torch.zeros((len(edges), 1), device=device)
 
     if len(nodes.columns) > 4:
         nfeature = torch.tensor(nodes.iloc[:, 4:].to_numpy(), device=device)
@@ -245,14 +254,24 @@ def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
             torch.empty(len(nodes), node_dim, device=device)))
 
     if bidirected:
-        # In this way, we repeat the edge one by one, remaining the increasing temporal order.
+        # In this way, we repeat the edge one by one, remaining the increasing
+        # temporal order.
         u = np.vstack((src, dst)).transpose().flatten()
         v = np.vstack((dst, src)).transpose().flatten()
         src, dst = u, v
         etime = etime.repeat_interleave(2)
         efeature = efeature.repeat_interleave(2, dim=0)
-    # Adding edges in the time increasing order, so that group_apply_edges will process the neighbors temporally ascendingly.
-    # We only add single directed edges, but treat them as undirected edges for representation. That is we store both source and destionation node representations at timestamp t on the same edge (s, d, t), assuming
+    # Adding edges in the time increasing order, so that `group_apply_edges`
+    # will process the neighbors temporally ascendingly. Further we store both
+    # source and destionation node representations at timestamp t on the same
+    # edge `(u, v, t)`.
+    # For bi-partite graphs, we can only access the node temporal features from
+    # one of source and destination tensors `g.edata["src_feat{layer}"][eid]`.
+    # For bidirected graphs, we use two edges `(u, v, t)` and `(v, u, t)`. Let
+    # `eid1` denote the eid of `(u, v, t)`, and `eid2` denote the eid of
+    # `(v, u, t)`. We can access node temporal features `(u, t)` from both
+    # tensors by `g.edata["src_feat{layer}"][eid1]` and
+    # `g.edata["dst_feat{layer}"][eid2]`.
     g = dgl.DGLGraph((src, dst))
     g.ndata["nfeat"] = nfeature  # .to(device)
     g.edata["timestamp"] = etime.to(nfeature)  # .to(device)
@@ -302,7 +321,8 @@ def padding_node(edges, nodes):
     nodes.loc[len(nodes)] = [0] * len(nodes.columns)
     dtypes = nodes.dtypes
     dtypes[["id_map"]] = int
-    nodes = nodes.astype(dtypes).sort_values(by="id_map").reset_index(drop=True)
+    nodes = nodes.astype(dtypes).sort_values(
+        by="id_map").reset_index(drop=True)
 
     # delta = edges["timestamp"].shift(-1) - edges["timestamp"]
     # assert np.all(delta.loc[:len(delta)-1] >= 0)
@@ -311,7 +331,8 @@ def padding_node(edges, nodes):
     edges.loc[len(edges)] = [0] * len(edges.columns)
     dtypes = edges.dtypes
     dtypes[["from_node_id", "to_node_id"]] = int
-    edges = edges.astype(dtypes).sort_values(by="timestamp").reset_index(drop=True)
+    edges = edges.astype(dtypes).sort_values(
+        by="timestamp").reset_index(drop=True)
     # delta = edges["timestamp"].shift(-1) - edges["timestamp"]
     # assert np.all(delta[:len(delta)-1] >= 0)
     return edges, nodes
@@ -339,13 +360,15 @@ def main():
     #     src_feat, dst_feat = model(g, current_layer=l)
     #     g.edata[f"src_feat{l}"] = src_feat
     #     g.edata[f"dst_feat{l}"] = dst_feat
-    model = TSAGEConv(in_feats=dims[0], out_feats=dims[1], aggregator_type="mean")
+    model = TSAGEConv(in_feats=dims[0],
+                      out_feats=dims[1], aggregator_type="mean")
     model = model.to(device)
     import copy
     nfeat_copy = copy.deepcopy(g.ndata["nfeat"])
     loss_fn = nn.CosineEmbeddingLoss(margin=0.5)
     import itertools
-    optimizer = torch.optim.Adam(itertools.chain([g.ndata["nfeat"]], model.parameters()), lr=0.01)
+    optimizer = torch.optim.Adam(itertools.chain(
+        [g.ndata["nfeat"]], model.parameters()), lr=0.01)
     # print(nfeat_copy)
     for i in range(10):
         logger.info("Epoch %3d", i)
