@@ -72,13 +72,15 @@ class TGraphSAGE(nn.Module):
 
 class NegativeSampler(object):
     def __init__(self, g, k):
-        self.weights = g.in_degrees().float() ** 0.75
+        # self.weights = g.in_degrees().float() ** 0.75
+        self.n_nodes = g.number_of_nodes()
         self.k = k
 
     def __call__(self, g, eids):
         src, _ = g.find_edges(eids)
         n = len(src)
-        dst = self.weights.multinomial(self.k * n, replacement=True)
+        # dst = self.weights.multinomial(self.k * n, replacement=True)
+        dst = torch.randint(self.n_nodes, (self.k * n,))
         src = src.repeat_interleave(self.k * n)
         return src, dst
 
@@ -312,6 +314,10 @@ def main():
     model = model.to(device)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # clip gradients by value: https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
+    for p in model.parameters():
+        p.register_hook(lambda grad: torch.clamp(
+            grad, -args.clip, args.clip))
 
     # Only use positive edges, so we have to multiply eids with 2.
     train_eids = np.arange(train_labels.shape[0] // 2)
@@ -329,10 +335,6 @@ def main():
             loss = model(g, batch_eids * mul)
             optimizer.zero_grad()
             loss.backward()
-            # clip gradients by value: https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
-            for p in model.parameters():
-                p.register_hook(lambda grad: torch.clamp(
-                    grad, -args.clip, args.clip))
             optimizer.step()
 
             acc, f1, auc = eval_linkpred(
