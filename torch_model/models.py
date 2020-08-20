@@ -286,10 +286,8 @@ def write_result(val_auc, metrics, dataset, params):
         f.write(row)
 
 
-def main():
-    # Set arg_parser, logger, and etc.
-    args = parse_args()
-    logger = set_logger()
+def main(args, logger):
+    
     logger.info(args)
 
     # Set device utility.
@@ -414,7 +412,7 @@ def parse_args():
                         help="Specify GPU id.")
     parser.add_argument("--lr", type=float, default=1e-2,
                         help="learning rate")
-    parser.add_argument("--trainable", action="store_true")
+    parser.add_argument("--no-trainable", "-nt", dest="trainable", action="store_false")
     parser.add_argument("--norm", action="store_true")
     parser.add_argument("--epochs", type=int, default=100,
                         help="number of training epochs")
@@ -427,9 +425,9 @@ def parse_args():
                         help="number of hidden gcn layers")
     parser.add_argument("--n-neg", type=int, default=1,
                         help="number of negative samples")
-    parser.add_argument("--pos-contra", action="store_true")
-    parser.add_argument("--neg-contra", action="store_true")
-    parser.add_argument("--remain-history", "-hist", action="store_true")
+    parser.add_argument("--pos-contra", "-pc", action="store_true")
+    parser.add_argument("--neg-contra", '-nc', action="store_true")
+    parser.add_argument("--remain-history", "-rh", "-hist", action="store_true")
     parser.add_argument("--n-hist", type=int, default=1,
                         help="number of history samples")
     parser.add_argument("--margin", type=float, default=0.5)
@@ -442,8 +440,12 @@ def parse_args():
     parser.add_argument("--display", dest="display", action="store_true")
     parser.add_argument("--no-display", dest="display", action="store_false"
                         )
-    return parser.parse_args()
+    return parser
 
 
 if __name__ == "__main__":
-    main()
+    # Set arg_parser, logger, and etc.
+    parser = parse_args()
+    args = parser.parse_args()
+    logger = set_logger()
+    main(args, logger)
