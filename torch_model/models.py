@@ -76,18 +76,35 @@ class NegativeSampler(object):
         self.n_nodes = g.number_of_nodes()
         self.k = k
 
-    def __call__(self, g, eids):
-        src, _ = g.find_edges(eids)
+    def __call__(self, g, src_eids):
+        src, _ = g.find_edges(src_eids)
         n = len(src)
         # dst = self.weights.multinomial(self.k * n, replacement=True)
         dst = torch.randint(self.n_nodes, (self.k * n,))
         src = src.repeat_interleave(self.k * n)
         return src, dst
 
+class HistorySampler(object):
+    def __init__(self, g, k):
+        self.id2eids = [g.out_edges(i, 'eid') for i in range(g.number_of_nodes())]
+        self.deg_indices = g.edata["src_deg_indices"]
+        self.k = k
+
+    def __call__(self, g, src_eids, remain_history):
+        src, _ = g.find_edges(src_eids)
+        n = len(src)
+        upper_ = self.deg_indices[src_eids].add(1).view(-1, 1)
+        cand_indices = (torch.rand(n, self.k).to(upper_.device) * upper_).long().view(-1)
+        cand_eids = [self.id2eids[node][i]  for node, i in zip(src, cand_indices)]
+        if remain_history:
+            return cand_eids
+        else:
+            return g.find_edges(cand_eids)
+        
 
 class TemporalLinkTrainer(nn.Module):
-    def __init__(self, g, in_feats, n_hidden, out_feats, args,
-                 remain_history=True, pos_contra=False, neg_contra=False):
+    def __init__(self, g, in_feats, n_hidden, out_feats, args, 
+                remain_history=True):
         super(TemporalLinkTrainer, self).__init__()
         self.logger = logging.getLogger()
         if args.trainable and g.ndata["nfeat"].requires_grad:
@@ -106,11 +123,12 @@ class TemporalLinkTrainer(nn.Module):
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.n_neg = args.n_neg
         self.n_hist = args.n_hist
-        self.remain_history = remain_history
         self.margin = nn.MarginRankingLoss(args.margin)
-        self.pos_contra = pos_contra
-        self.neg_contra = neg_contra
+        self.pos_contra = args.pos_contra
+        self.neg_contra = args.neg_contra
+        self.remain_history = args.remain_history
         self.neg_sampler = NegativeSampler(g, self.n_neg)
+        self.hist_sampler = HistorySampler(g, self.n_hist)
         if args.norm:
             self.norm = nn.LayerNorm(out_feats)
 
@@ -147,14 +165,11 @@ class TemporalLinkTrainer(nn.Module):
             return loss
         assert self.n_neg == self.n_hist, "We only implement for the equal \
             number history samples and negative samples."
-        upper_ = (g.edata["src_deg_indices"][src_eids] + 1).view(-1, 1)
-        cands = (torch.rand(len(src_eids), self.n_hist)
-                 * upper_).long().view(-1)
         if self.remain_history:
-            contra_eids = cands
+            contra_eids = self.hist_sampler(g, src_eids, True)
         else:
-            nodes = g.find_edges(cands)[1]
-            contra_eids = LatestNodeInteractionFinder(g, nodes, t, mode="in")
+            _, cands = self.hist_sampler(g, src_eids, False)
+            contra_eids = LatestNodeInteractionFinder(g, cands, t, mode="in")
         contra_logits = self.pred(g, src_eids, contra_eids, t).squeeze()
         if self.pos_contra:
             loss += self.margin(pos_logits.repeat(self.n_hist),
@@ -323,7 +338,7 @@ def main():
     train_eids = np.arange(train_labels.shape[0] // 2)
     num_batch = np.int(np.ceil(len(train_eids) / args.batch_size))
     epoch_bar = trange(args.epochs, disable=(not args.display))
-    early_stopper = EarlyStopMonitor(max_round=10)
+    early_stopper = EarlyStopMonitor(max_round=5)
     for epoch in epoch_bar:
         np.random.shuffle(train_eids)
         batch_bar = trange(num_batch, disable=(not args.display))
@@ -351,10 +366,10 @@ def main():
         lr = "%.4f" % args.lr
         trainable = "train" if hasattr(model, "nfeat") else "no-train"
         norm = "norm" if hasattr(model, "norm") else "no-norm"
-        contra = "contra" if (
-            model.pos_contra or model.neg_contra) else "no-contra"
+        pos = "pos" if model.pos_contra else "no-pos"
+        neg = "neg" if model.neg_contra else "no-neg"
         def ckpt_path(
-            epoch): return f'./ckpt/{args.dataset}-{args.agg_type}-{trainable}-{norm}-{contra}-{lr}-{epoch}.pth'
+            epoch): return f'./ckpt/{args.dataset}-{args.agg_type}-{trainable}-{norm}-{pos}-{neg}-{lr}-{epoch}.pth'
         if early_stopper.early_stop_check(auc):
             logger.info(
                 f"No improvement over {early_stopper.max_round} epochs.")
@@ -372,7 +387,8 @@ def main():
     acc, f1, auc = eval_linkpred(model, g, test_labels)
     params = {"best_epoch": early_stopper.best_epoch,
               "bidirected": args.bidirected, "trainable": trainable,
-              "norm": norm, "contra": contra, "lr": lr,
+              "norm": norm, "pos_contra": args.pos_contra, 
+              "neg_contra": args.neg_contra, "lr": lr,
               "n_hist": args.n_hist,
               "n_neg": args.n_neg, "n_layers": args.n_layers,
               "time_encoding": args.time_encoding, "dropout": args.dropout,
@@ -411,7 +427,9 @@ def parse_args():
                         help="number of hidden gcn layers")
     parser.add_argument("--n-neg", type=int, default=1,
                         help="number of negative samples")
-    parser.add_argument("--contrastive", action="store_true")
+    parser.add_argument("--pos-contra", action="store_true")
+    parser.add_argument("--neg-contra", action="store_true")
+    parser.add_argument("--remain-history", "-hist", action="store_true")
     parser.add_argument("--n-hist", type=int, default=1,
                         help="number of history samples")
     parser.add_argument("--margin", type=float, default=0.5)
