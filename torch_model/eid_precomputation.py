@@ -114,7 +114,7 @@ def _latest_edge(g, u, t, mode="in"):
     return refer_eids[torch.argsort(seids)]
 
 
-@timeit
+# @timeit
 def LatestNodeInteractionFinder(g, u, t, mode="in"):
     """for each `(u, t)`, find the latest in/out interaction of `u` in graph `g`.
 

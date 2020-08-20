@@ -36,11 +36,11 @@ class TimeEncodingLayer(nn.Module):
         if self.time_encoding == "concat":
             x = self.fc1(torch.cat([u, t], dim=1))
         elif self.time_encoding == "cosine":
-            t = torch.cos(t * self.basis_freq.view(1, -1) +
+            t = torch.cos(t.view(-1, 1) * self.basis_freq.view(1, -1) +
                           self.phase.view(1, -1))
             x = self.fc1(torch.cat([u, t], dim=-1))
         elif self.time_encoding == "outer":
-            t = torch.cos(t * self.basis_freq.view(1, -1) +
+            t = torch.cos(t.view(-1, 1) * self.basis_freq.view(1, -1) +
                           self.phase.view(1, -1))
             u = self.trans(u)
             assert(u.shape[0] == t.shape[0])
@@ -78,7 +78,7 @@ class TemporalLinkLayer(nn.Module):
         featu = g.edata["src_feat"][src_eids]
         tu = g.edata["timestamp"][src_eids]
         featv = g.edata["dst_feat"][dst_eids]
-        tv = g.edata["dst_feat"][dst_eids]
+        tv = g.edata["timestamp"][dst_eids]
         embed_u = self.encode_time(featu, t-tu)
         embed_v = self.encode_time(featv, t-tv)
 
@@ -119,14 +119,12 @@ class TSAGEConv(nn.Module):
         Aggregator type to use (``mean``, ``gcn``, ``pool``, ``lstm``).
     """
 
-    def __init__(self, in_feats, out_feats, aggregator_type, feat_drop=0.,
-                 time_encoding="cosine"):
+    def __init__(self, in_feats, out_feats, aggregator_type, time_encoding="cosine"):
         super(TSAGEConv, self).__init__()
 
         self._in_src_feats, self._in_dst_feats = in_feats, in_feats
         self._out_feats = out_feats
         self._aggre_type = aggregator_type
-        self.feat_drop = nn.Dropout(feat_drop)
         self.encode_time = TimeEncodingLayer(
             in_feats, in_feats, time_encoding=time_encoding)
         # aggregator type: mean/pool/lstm/gcn
@@ -258,21 +256,17 @@ class TSAGEConv(nn.Module):
         dst_name = f'dst_feat{current_layer - 1}'
         # add dropout layer for node embeddings
         src_feat, dst_feat = g.edata[src_name], g.edata[dst_name]
-        src_feat = self.encode_time(src_feat, g.edata["timestamp"])
-        dst_feat = self.encode_time(dst_feat, g.edata["timestamp"])
-        src_feat, dst_feat = self.feat_drop(src_feat), self.feat_drop(dst_feat)
-        g.edata[src_name] = src_feat
-        g.edata[dst_name] = dst_feat
+        g.edata[src_name] = self.encode_time(src_feat, g.edata["timestamp"])
+        g.edata[dst_name] = self.encode_time(dst_feat, g.edata["timestamp"])
 
         src_conv = self.group_func_wrapper(
-            groupby="src",  src_feat=src_feat, dst_feat=dst_feat)
+            groupby="src",  src_feat=src_name, dst_feat=dst_name)
         dst_conv = self.group_func_wrapper(
-            groupby="dst",  src_feat=src_feat, dst_feat=dst_feat)
+            groupby="dst",  src_feat=src_name, dst_feat=dst_name)
         g.group_apply_edges(group_by="src", func=src_conv)
         g.group_apply_edges(group_by="dst", func=dst_conv)
 
-        src_feat, dst_feat = g.edata["src_feat"], graph.edata["dst_feat"]
-        return src_feat, dst_feat
+        return g.edata["src_feat"], g.edata["dst_feat"]
 
 
 class GTAConv(TSAGEConv):

@@ -19,8 +19,8 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 from data_loader.data_util import load_data, load_split_edges, load_label_edges
 from model.utils import get_free_gpu, timeit, EarlyStopMonitor
-from torch_model.util_dgl import set_logger, construct_dglgraph, padding_node, TSAGEConv
-from torch_model.layers import TemporalLinkLayer
+from torch_model.util_dgl import set_logger, construct_dglgraph
+from torch_model.layers import TemporalLinkLayer, TSAGEConv
 from torch_model.eid_precomputation import _prepare_deg_indices, _par_deg_indices, _deg_indices_full, _par_deg_indices_full, _latest_edge, LatestNodeInteractionFinder
 # A cpp extension computing upper_bound along the last dimension of an non-decreasing matrix. It saves huge memory use.
 import upper_bound_cpp
@@ -31,14 +31,19 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 
 class TGraphSAGE(nn.Module):
-    def __init__(self, in_feats, n_hidden, out_feats, n_layers, activation, dropout, aggregator_type="mean"):
+    def __init__(self, in_feats, n_hidden, out_feats, n_layers, activation,
+                 dropout, agg_type="mean", time_encoding="cosine"):
         super(TGraphSAGE, self).__init__()
         self.layers = nn.ModuleList()
 
-        self.layers.append(TSAGEConv(in_feats, n_hidden, aggregator_type))
+        self.layers.append(TSAGEConv(in_feats, n_hidden,
+                                     agg_type, time_encoding=time_encoding))
         for i in range(n_layers - 2):
-            self.layers.append(TSAGEConv(n_hidden, n_hidden, aggregator_type))
-        self.layers.append(TSAGEConv(n_hidden, out_feats, aggregator_type))
+            self.layers.append(TSAGEConv(n_hidden, n_hidden,
+                                         agg_type, time_encoding=time_encoding))
+        if n_layers >= 2:
+            self.layers.append(TSAGEConv(n_hidden, out_feats,
+                                         agg_type, time_encoding=time_encoding))
         self.dropout = nn.Dropout(dropout)
         self.activation = activation
 
@@ -48,14 +53,20 @@ class TGraphSAGE(nn.Module):
         named `src_feat{current_layer}` and `dst_feat{current_layer}`.
         """
         g = g.local_var()
-        # g.edata["src_feat0"] = ...
-        # g.edata["dst_feat0"] = ...
+
+        def combine_feats(edges):
+            return {"src_feat0": torch.cat(
+                [edges.src["nfeat"], edges.data["efeat"]], dim=1),
+                "dst_feat0": torch.cat(
+                [edges.dst["nfeat"], edges.data["efeat"]], dim=1)}
+        g.apply_edges(func=combine_feats)
+
         for i, layer in enumerate(self.layers):
-            # print(f"layer {i}")
             cl = i + 1
             src_feat, dst_feat = layer(g, current_layer=cl)
             g.edata[f"src_feat{cl}"] = self.activation(self.dropout(src_feat))
             g.edata[f"dst_feat{cl}"] = self.activation(self.dropout(dst_feat))
+        src_feat, dst_feat = g.edata[f"src_feat{cl}"], g.edata[f"dst_feat{cl}"]
         return src_feat, dst_feat
 
 
@@ -72,51 +83,97 @@ class NegativeSampler(object):
         return src, dst
 
 
-class HistorySampler(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, g, eids):
-        pass
-
-
 class TemporalLinkTrainer(nn.Module):
-    def __init__(self, g, in_feats, args):
+    def __init__(self, g, in_feats, n_hidden, out_feats, args,
+                 remain_history=True, pos_contra=False, neg_contra=False):
         super(TemporalLinkTrainer, self).__init__()
         self.logger = logging.getLogger()
         if g.ndata["nfeat"].requires_grad:
             self.nfeat = g.ndata["nfeat"]
             self.logger.info(
-                "Optimization includes randomly initialized dim-{} node \
-                embeddings.".format(self.nfeat.shape[-1]))
+                "Optimization includes randomly initialized dim-{} node embeddings.".format(self.nfeat.shape[-1]))
         else:
             self.logger.info(
                 "Optimization only includes convolution parameters.")
 
-        self.conv = TGraphSAGE(in_feats, args.n_hidden, args.n_hidden,
-                               args.n_layers, F.relu, args.dropout, args.agg_type)
+        self.conv = TGraphSAGE(in_feats, n_hidden, out_feats,
+                               args.n_layers, F.relu, args.dropout,
+                               args.agg_type, args.time_encoding)
         self.pred = TemporalLinkLayer(
-            in_feats, 1, time_encoding=args.time_encoding)
+            out_feats, 1, time_encoding=args.time_encoding)
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.n_neg = args.n_neg
         self.n_hist = args.n_hist
+        self.remain_history = remain_history
+        self.margin = nn.MarginRankingLoss(args.margin)
+        self.pos_contra = pos_contra
+        self.neg_contra = neg_contra
         self.neg_sampler = NegativeSampler(g, self.n_neg)
-        self.his_sampler = HistorySampler()
 
     def forward(self, g, batch_eids, bidirected=False):
         g = g.local_var()
+        g.ndata["deg"] = (g.in_degrees() +
+                          g.out_degrees()).to(g.ndata["nfeat"])
+        if bidirected:
+            g.ndata["deg"] /= 2
         src_feat, dst_feat = self.conv(g)
         g.edata["src_feat"] = src_feat
         g.edata["dst_feat"] = dst_feat
+
+        src, dst = g.find_edges(batch_eids)
+        t = g.edata["timestamp"][batch_eids]
+        src_eids = LatestNodeInteractionFinder(g, src, t, mode="out")
+        dst_eids = LatestNodeInteractionFinder(g, dst, t, mode="in")
+        _, neg_eids = self.neg_sampler(g, batch_eids)
         # self.pred(g, batch_eids, bidirected=bidirected)
-        logits = (src_feat[batch_eids] * dst_feat[batch_eids]).sum(dim=-1)
-        return logits.squeeze()
+        pos_logits = self.pred(g, src_eids, dst_eids, t).squeeze()
+        neg_logits = self.pred(g, src_eids.repeat(
+            self.n_neg), neg_eids, t.repeat(self.n_neg)).squeeze()
+        loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
+        loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
+        loss += self.contrastive(g, t, src_eids, pos_logits, neg_logits)
+        return loss
 
-    def contrastive(self, g, batch_eids):
-        pass
+    def contrastive(self, g, t, src_eids, pos_logits, neg_logits):
+        loss = 0.
+        if not (self.pos_contra or self.neg_contra):
+            return loss
+        assert self.n_neg == self.n_hist, "We only implement for the equal \
+            number history samples and negative samples."
+        upper_ = (g.edata["src_deg_indices"][src_eids] + 1).view(-1, 1)
+        cands = (torch.rand(len(src_eids), self.n_hist)
+                 * upper_).long().view(-1)
+        if self.remain_history:
+            contra_eids = cands
+        else:
+            nodes = g.find_edges(cands)[1]
+            contra_eids = LatestNodeInteractionFinder(g, nodes, t, mode="in")
+        contra_logits = self.pred(g, src_eids, contra_eids, t).squeeze()
+        if self.pos_contra:
+            loss += self.margin(pos_logits.repeat(self.n_hist),
+                                contra_logits, torch.ones_like(contra_logits))
+        if self.neg_contra:
+            loss += self.margin(contra_logits, neg_logits,
+                                torch.ones_like(contra_logits))
+        return loss
 
-    def infer(self, g, features, edges, bidirected=False):
-        pass
+    def infer(self, g, edges, bidirected=False):
+        self.eval()
+        g = g.local_var()
+        g.ndata["deg"] = (g.in_degrees() +
+                          g.out_degrees()).to(g.ndata["nfeat"])
+        if bidirected:
+            g.ndata["deg"] /= 2
+        src_feat, dst_feat = self.conv(g)
+        g.edata["src_feat"] = src_feat
+        g.edata["dst_feat"] = dst_feat
+
+        u, v, t = edges[0], edges[1], torch.tensor(
+            edges[2]).float().to(g.ndata["deg"].device)
+        src_eids = LatestNodeInteractionFinder(g, u, t, mode="out")
+        dst_eids = LatestNodeInteractionFinder(g, v, t, mode="in")
+        logits = self.pred(g, src_eids, dst_eids, t)
+        return logits
 
 
 def prepare_dataset(dataset):
@@ -168,7 +225,7 @@ def _check_latest_edge_extension(g, edges):
 
 
 def _df2np(edges):
-    return edges.iloc[:, :3].to_numpy().transpose()
+    return edges.iloc[:, 0].to_numpy(), edges.iloc[:, 1].to_numpy(), edges.iloc[:, 2].to_numpy()
 
 
 def eval_linkpred(model, g, df, batch_size=None):
@@ -244,15 +301,15 @@ def main():
     # Set model configuration.
     # Input features: node_featurs + edge_features + time_encoding
     in_feats = (g.ndata["nfeat"].shape[-1] + g.edata["efeat"].shape[-1])
-    out_feats = args.n_hidden
-    model = TemporalLinkTrainer(g, in_feats, args)
+    model = TemporalLinkTrainer(
+        g, in_feats, args.n_hidden, args.n_hidden, args)
     model = model.to(device)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # only use positive edges
+    # Only use positive edges, so we have to multiply eids with 2.
     train_eids = np.arange(train_labels.shape[0] // 2)
-    num_batch = np.int(np.ceil(train_eids / args.batch_size))
+    num_batch = np.int(np.ceil(len(train_eids) / args.batch_size))
     epoch_bar = trange(args.epochs, disable=(not args.display))
     early_stopper = EarlyStopMonitor(max_round=10)
     for epoch in epoch_bar:
@@ -262,7 +319,8 @@ def main():
             model.train()
             batch_eids = train_eids[idx * args.batch_size:
                                     (idx + 1) * args.batch_size]
-            loss = model(g, batch_eids)
+            mul = 2 if args.bidirected else 1
+            loss = model(g, batch_eids * mul)
             optimizer.zero_grad()
             loss.backward()
             # clip gradients by value: https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
@@ -338,6 +396,7 @@ def parse_args():
     parser.add_argument("--contrastive", action="store_true")
     parser.add_argument("--n-hist", type=int, default=1,
                         help="number of history samples")
+    parser.add_argument("--margin", type=float, default=0.5)
     parser.add_argument("--weight-decay", type=float, default=1e-5,
                         help="Weight for L2 loss")
     parser.add_argument("--clip", type=float, default=5.0,
