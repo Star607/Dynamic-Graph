@@ -25,7 +25,7 @@ class TimeEncodingLayer(nn.Module):
             self.phase = nn.Parameter(torch.zeros(hidden_dim))
             self.trans = nn.Linear(in_features, hidden_dim)
             self.fc1 = nn.Linear(np.square(hidden_dim), out_features)
-            nn.init.xavier_normal_(self.trans)
+            nn.init.xavier_normal_(self.trans.weight)
         else:
             raise NotImplementedError
         self.act = nn.ReLU()
@@ -34,7 +34,7 @@ class TimeEncodingLayer(nn.Module):
 
     def forward(self, u, t):
         if self.time_encoding == "concat":
-            x = self.fc1(torch.cat([u, t], dim=1))
+            x = self.fc1(torch.cat([u, t.view(-1, 1)], dim=1))
         elif self.time_encoding == "cosine":
             t = torch.cos(t.view(-1, 1) * self.basis_freq.view(1, -1) +
                           self.phase.view(1, -1))

@@ -88,7 +88,7 @@ class TemporalLinkTrainer(nn.Module):
                  remain_history=True, pos_contra=False, neg_contra=False):
         super(TemporalLinkTrainer, self).__init__()
         self.logger = logging.getLogger()
-        if g.ndata["nfeat"].requires_grad:
+        if args.trainable and g.ndata["nfeat"].requires_grad:
             self.nfeat = g.ndata["nfeat"]
             self.logger.info(
                 "Optimization includes randomly initialized dim-{} node embeddings.".format(self.nfeat.shape[-1]))
@@ -109,6 +109,8 @@ class TemporalLinkTrainer(nn.Module):
         self.pos_contra = pos_contra
         self.neg_contra = neg_contra
         self.neg_sampler = NegativeSampler(g, self.n_neg)
+        if args.norm:
+            self.norm = nn.LayerNorm(out_feats)
 
     def forward(self, g, batch_eids, bidirected=False):
         g = g.local_var()
@@ -117,6 +119,8 @@ class TemporalLinkTrainer(nn.Module):
         if bidirected:
             g.ndata["deg"] /= 2
         src_feat, dst_feat = self.conv(g)
+        if hasattr(self, "norm"):
+            src_feat, dst_feat = self.norm(src_feat), self.norm(dst_feat)
         g.edata["src_feat"] = src_feat
         g.edata["dst_feat"] = dst_feat
 
@@ -124,7 +128,8 @@ class TemporalLinkTrainer(nn.Module):
         t = g.edata["timestamp"][batch_eids]
         src_eids = LatestNodeInteractionFinder(g, src, t, mode="out")
         dst_eids = LatestNodeInteractionFinder(g, dst, t, mode="in")
-        _, neg_eids = self.neg_sampler(g, batch_eids)
+        _, neg_dst = self.neg_sampler(g, batch_eids)
+        neg_eids = LatestNodeInteractionFinder(g, neg_dst, t, mode="in")
         # self.pred(g, batch_eids, bidirected=bidirected)
         pos_logits = self.pred(g, src_eids, dst_eids, t).squeeze()
         neg_logits = self.pred(g, src_eids.repeat(
@@ -244,7 +249,7 @@ def eval_linkpred(model, g, df, batch_size=None):
 
 
 def write_result(val_auc, metrics, dataset, params):
-    res_path = "result/{}-GTC.csv".format(dataset)
+    res_path = "results/{}-GTC.csv".format(dataset)
     headers = ["method", "dataset", "valid_auc",
                "accuracy", "f1", "auc", "params"]
     acc, f1, auc = metrics
@@ -256,6 +261,7 @@ def write_result(val_auc, metrics, dataset, params):
     with open(res_path, 'a') as f:
         result_str = "GTC,{},{:.4f},{:.4f},{:.4f},{:.4f}".format(
             dataset, val_auc, acc, f1, auc)
+        logging.info(result_str)
         params_str = ",".join(["{}={}".format(k, v)
                                for k, v in params.items()])
         params_str = "\"{}\"".format(params_str)
@@ -334,14 +340,19 @@ def main():
             batch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
 
         acc, f1, auc = eval_linkpred(model, g, val_labels)
-        if epoch % 100 == 0:
-            logger.info("epoch:%d acc: %.4f, auc: %.4f, f1: %.4f",
-                        epoch, acc, auc, f1)
+        # if epoch % 100 == 0:
+        #     logger.info("epoch:%d acc: %.4f, auc: %.4f, f1: %.4f",
+        #                 epoch, acc, auc, f1)
         epoch_bar.update()
         epoch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
 
+        lr = "%.4f" % args.lr
+        trainable = "train" if hasattr(model, "nfeat") else "no-train"
+        norm = "norm" if hasattr(model, "norm") else "no-norm"
+        contra = "contra" if (
+            model.pos_contra or model.neg_contra) else "no-contra"
         def ckpt_path(
-            epoch): return f'./ckpt/{args.dataset}-{args.agg_type}-{epoch}.pth'
+            epoch): return f'./ckpt/{args.dataset}-{args.agg_type}-{trainable}-{norm}-{contra}-{lr}-{epoch}.pth'
         if early_stopper.early_stop_check(auc):
             logger.info(
                 f"No improvement over {early_stopper.max_round} epochs.")
@@ -357,8 +368,10 @@ def main():
     model.eval()
     _, _, val_auc = eval_linkpred(model, g, val_labels)
     acc, f1, auc = eval_linkpred(model, g, test_labels)
-    params = {"epochs": early_stopper.best_epoch,
-              "bidirected": args.bidirected, "n_hist": args.n_hist,
+    params = {"best_epoch": early_stopper.best_epoch,
+              "bidirected": args.bidirected, "trainable": trainable,
+              "norm": norm, "contra": contra, "lr": lr,
+              "n_hist": args.n_hist,
               "n_neg": args.n_neg, "n_layers": args.n_layers,
               "time_encoding": args.time_encoding, "dropout": args.dropout,
               "weight_decay": args.weight_decay}
@@ -374,6 +387,7 @@ def parse_args():
                         help="For non-bipartite graphs, set this as True.")
     parser.add_argument("--dropout", type=float, default=0.2,
                         help="dropout probability")
+    parser.add_argument("--log-file", action="store_true")
     parser.add_argument("--gpu", dest="gpu", action="store_true",
                         help="Whether use GPU.")
     parser.add_argument("--no-gpu", dest="gpu", action="store_false",
@@ -382,6 +396,8 @@ def parse_args():
                         help="Specify GPU id.")
     parser.add_argument("--lr", type=float, default=1e-2,
                         help="learning rate")
+    parser.add_argument("--trainable", action="store_true")
+    parser.add_argument("--norm", action="store_true")
     parser.add_argument("--epochs", type=int, default=100,
                         help="number of training epochs")
     parser.add_argument("--time-encoding", "-te", type=str, default="cosine",
