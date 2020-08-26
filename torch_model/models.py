@@ -315,7 +315,10 @@ def main(args, logger):
     # or `cummax` to accelerate the computation speed. Otherwise, we have to
     # compute a mask matrix multiplication for each `(v, t)`, which costs even
     # 12GB memory for 58K interactions.
-    deg_indices = _par_deg_indices_full(g)
+    if args.dataset == "ia-slashdot-reply-dir":
+        deg_indices = _deg_indices_full(g)
+    else:
+        deg_indices = _par_deg_indices_full(g)
     for k, v in deg_indices.items():
         g.edata[k] = v.to(device).unsqueeze(-1).detach()
 
@@ -367,7 +370,7 @@ def main(args, logger):
         pos = "pos" if model.pos_contra else "no-pos"
         neg = "neg" if model.neg_contra else "no-neg"
         def ckpt_path(
-            epoch): return f'./ckpt/{args.dataset}-{args.agg_type}-{trainable}-{norm}-{pos}-{neg}-{lr}-{epoch}.pth'
+            epoch): return f'./ckpt/{args.dataset}-{args.agg_type}-{trainable}-{norm}-{pos}-{neg}-{lr}-{epoch}-{args.hostname}-{device.type}-{device.index}.pth'
         if early_stopper.early_stop_check(auc):
             logger.info(
                 f"No improvement over {early_stopper.max_round} epochs.")
@@ -395,6 +398,7 @@ def main(args, logger):
 
 
 def parse_args():
+    import socket
     parser = argparse.ArgumentParser(description='Temporal GraphSAGE')
     parser.add_argument("--dataset", type=str, default="ia-contact")
     parser.add_argument("--no-bidirected", dest="bidirected", action="store_false",
@@ -408,6 +412,8 @@ def parse_args():
                         help="Whether use GPU.")
     parser.add_argument("--no-gpu", dest="gpu", action="store_false",
                         help="Whether use GPU.")
+    hostname = socket.gethostname()
+    parser.add_argument("--hostname", action="store_const", const=hostname, default=hostname)
     parser.add_argument("--gid", type=int, default=-1,
                         help="Specify GPU id.")
     parser.add_argument("--lr", type=float, default=1e-2,

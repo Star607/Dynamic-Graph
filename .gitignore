@@ -4,6 +4,7 @@
 **/__pycache__/*
 *.pyc
 cache*
+core*
 ctdne_data/*
 ctdne_embs/*
 ctdne_output/*

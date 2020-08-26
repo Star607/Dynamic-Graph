@@ -81,6 +81,13 @@ torch::Tensor upper_bound_par(const torch::Tensor &bucket_adj) {
     std::vector<std::thread> workers;
     auto ans = torch::full(sizes, dim, torch::kInt64);
     for (auto i = 0; i < sizes[0]; i++) {
+        if (i % 128 == 0) { // Set maximum threads as 128.
+            for (std::thread &t : workers) {
+               if (t.joinable())
+                   t.join();
+            }
+            workers.clear();
+        }
         workers.push_back(std::thread(sub_upper_bound, std::ref(bucket_adj),
                                       std::ref(ans), i));
         // sub_upper_bound(bucket_adj, ans, i);
