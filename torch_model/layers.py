@@ -210,7 +210,9 @@ class TSAGEConv(nn.Module):
                 # mask_feat = torch.bmm(mask, h_neighs)
                 h_feat = h_neighs.cumsum(dim=1)
                 mask_feat = h_feat.gather(dim=1, index=indices)
-                norm_cof = deg_self.to(mask_feat) + 1
+                # norm_cof = deg_self.to(mask_feat) + 1
+                norm_cof = edges.data[f"{groupby}_deg_indices"].add(
+                    1.0).view(buc, deg)
                 mask_feat = (mask_feat + h_self) / norm_cof.unsqueeze(-1)
             elif self._aggre_type == "pool":
                 # mask_feat = torch.bmm(mask, h_neighs)

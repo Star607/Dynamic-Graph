@@ -14,6 +14,8 @@ parser.add_argument("--start", type=int, default=0, help="Datset start index.")
 parser.add_argument("--end", type=int, default=14,
                     help="Datset end index (exclusive).")
 parser.add_argument("--gid", type=int, default=0)
+parser.add_argument("--display", dest="display", action="store_true")
+
 args = parser.parse_args()
 logger.info(args)
 
@@ -32,15 +34,18 @@ def evaluate():
     fname = _iterate_datasets()
     fname = fname[args.start: args.end]
     cmds = []
-    default = " --dataset {} --bidirected --gpu --gid {} --no-display "
-    cmds.append(default + "-te concat")
+    if args.display:
+        default = " --dataset {} --bidirected --gpu --gid {} --display "
+    else:
+        default = " --dataset {} --bidirected --gpu --gid {} --no-display "
+    # cmds.append(default + "-te concat")
     cmds.append(default)
-    cmds.append(default + "-te outer")
+    # cmds.append(default + "-te outer")
     cmds.append(default + "-pc")
     cmds.append(default + "-nc")
-    cmds.append(default + "-pc -nc -te concat")
+    # cmds.append(default + "-pc -nc -te concat")
     cmds.append(default + "-pc -nc")
-    cmds.append(default + "-pc -nc -te outer")
+    # cmds.append(default + "-pc -nc -te outer")
     for data in fname:
         for cmd in cmds:
             margs = parse_args().parse_args(cmd.format(data, args.gid).split())

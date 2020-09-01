@@ -20,7 +20,7 @@ Additionally, we split the datasets into three-fold: train, valid and test datas
 | ia-movielens-user2tags-10m  | Assignment  | 0.0007  | 17K   | 95.5K  | 33.4K | 12.7K/3.8K   | 6.0K  | 5.8   | 1108.97 |
 | soc-wiki-elec               | -           | 0.004   | 7.1K  | 107.0K | 12.9K | 5.2K/1.8K   | 1.3K  | 15.04 | 1378.34 | 
 | ia-primary-school-proximity | Proximity   | 4.31    | 242   | 125.7K | 59.2K |  242/0  | 2.6K  | 519.7 | 1.35 |
-| ia-slashdot-reply-dir       | -           | 0.0001  | 51K   | 140.7K | 27.5K | 39K/12K   | 3.3K  | 2.76  | 13395.39 |
+| ia-slashdot-reply-dir       | -           | 0.0001  | 51K   | 140.7K | 27.5K | 39K/12K   | 3.3K  | 2.76  | 977.36 |
 | ia-frwiKinews-user-edits    | Edit        | 0.0006  | 25K   | 193.6K | 58.8K | 1.9K/5.6K   | 32.6K | 7.73  | 2461.24 |
 | JODIE-wikipedia             | -           | 0.0036  | 9.2K  | 157.4K | 59.7K |  7.4K/1.7K  | 1.9K  | 17.07 | 31.00 |
 | JODIE-mooc   | - | 0.016 | 7.1K | 411.7K | 179.0K | 6.6K/524  | 19.4K | 57.64 | 29.77 |

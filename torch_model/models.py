@@ -127,6 +127,7 @@ class TemporalLinkTrainer(nn.Module):
         self.pos_contra = args.pos_contra
         self.neg_contra = args.neg_contra
         self.remain_history = args.remain_history
+        self.lam = args.lam
         self.neg_sampler = NegativeSampler(g, self.n_neg)
         self.hist_sampler = HistorySampler(g, self.n_hist)
         if args.norm:
@@ -156,7 +157,7 @@ class TemporalLinkTrainer(nn.Module):
             self.n_neg), neg_eids, t.repeat(self.n_neg)).squeeze()
         loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
         loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
-        loss += self.contrastive(g, t, src_eids, pos_logits, neg_logits)
+        loss += self.lam * self.contrastive(g, t, src_eids, pos_logits, neg_logits)
         return loss
 
     def contrastive(self, g, t, src_eids, pos_logits, neg_logits):
@@ -393,7 +394,8 @@ def main(args, logger):
               "n_hist": args.n_hist,
               "n_neg": args.n_neg, "n_layers": args.n_layers,
               "time_encoding": args.time_encoding, "dropout": args.dropout,
-              "weight_decay": args.weight_decay}
+              "weight_decay": args.weight_decay,
+              "lambda": args.lam}
     write_result(val_auc, (acc, f1, auc), args.dataset, params)
 
 
@@ -433,6 +435,7 @@ def parse_args():
                         help="number of negative samples")
     parser.add_argument("--pos-contra", "-pc", action="store_true")
     parser.add_argument("--neg-contra", '-nc', action="store_true")
+    parser.add_argument("--lam", type=float, default=0.1, help="Weight for contrastive loss.")
     parser.add_argument("--remain-history", "-rh", "-hist", action="store_true")
     parser.add_argument("--n-hist", type=int, default=1,
                         help="number of history samples")
