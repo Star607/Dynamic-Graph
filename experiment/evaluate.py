@@ -1,3 +1,4 @@
+import numpy as np
 import argparse
 import logging
 import os
@@ -7,7 +8,6 @@ from collections import defaultdict
 from datetime import datetime
 from itertools import product
 
-import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.linear_model import LogisticRegression
@@ -170,7 +170,7 @@ def evaluate_tnode():
     fname = fname[args.start: args.end]
     logger.info("Running {} embedding programs.".format(args.method))
     run_tnode(dataset=args.dataset, n_jobs=args.n_jobs,
-              start=args.start, end=args.end, times=args.times)
+              start=args.start, end=args.end)
     logger.info("Done {}.".format(args.method))
 
 
@@ -291,12 +291,17 @@ def evaluate_gta():
 
 
 @iterate_times
-def evaluate_tgat():
+def evaluate_tgat(project_dir="/nfs/zty/Graph/TGAT-bk"):
     fname = iterate_datasets(dataset=args.dataset)
     fname = fname[args.start: args.end]
-    if args.run:
-        for name in fname:
-            pass
+    command = "python {}/exper_edge.py -d {}"
+    commands = []
+    for name in fname:
+        commands.append(command.format(project_dir, name))
+    os.chdir(project_dir)
+    print("Preprocessing finished.")
+    for cmd in commands:
+        os.system(cmd)
 
 
 @iterate_times
@@ -324,6 +329,8 @@ if __name__ == "__main__":
         evaluate = evaluate_sage
     elif args.method == "htne":
         evaluate = evaluate_htne
+    elif args.method == "tgat":
+        evaluate = evaluate_tgat
     else:
         raise NotImplementedError(
             "Method {} not implemented!".format(args.method))

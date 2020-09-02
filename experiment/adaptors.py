@@ -92,13 +92,13 @@ def run_triad(dataset="all", project_dir="/nfs/zty/Graph/2-DynamicTriad/", n_job
             df["to_node_id"] = df["to_node_id"].map(id2idx)
 
             nodes = set(id2idx.values())
-            stride = len(df) // 32
+            stride = len(df) // 128
             adjs = [edges2adj(df.iloc[i*stride:(i+1)*stride], nodes)
-                    for i in range(32)]
+                    for i in range(128)]
             # for i, (adj_ids, adj_cnt) in enumerate(adjs):
             Parallel(n_jobs=32)(delayed(write_adj)(input_dir, i, adj_ids, adj_cnt)
                                 for i, (adj_ids, adj_cnt) in enumerate(adjs))
-        for stepsize in [1, 4, 8]:
+        for stepsize in [1, 4, 16]:
             b_1 = b_2 = 0.1
             output_dir = os.path.join(
                 project_dir, "output/{}-{}".format(name, stepsize))
@@ -143,7 +143,6 @@ def run_tnode(dataset="all", project_dir="/nfs/zty/Graph/5-tNodeEmbed/", n_jobs=
     command = "python {project_dir}/src/main.py -d {dataset} -n {nstep}"
     commands = []
     for name, nstep in product(fname, [128, 32, 8]):
-        name = name[:-4]
         dump_foler = os.path.join(project_dir, "data/{}".format(name))
         if not os.path.exists(dump_foler):
             os.makedirs(dump_foler)

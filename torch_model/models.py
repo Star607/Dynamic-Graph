@@ -10,7 +10,6 @@ import dgl  # import dgl after torch will cause `GLIBCXX_3.4.22` not found.
 from dgl.nn.pytorch.conv import SAGEConv
 import numpy as np
 import pandas as pd
-import scipy.sparse as ssp
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
