@@ -99,9 +99,10 @@ class TemporalNodeLayer(nn.Module):
         self.fc = nn.Linear(in_features, out_features)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, g, eids, mode="src"):
+    def forward(self, g, eids, t, mode="src"):
         x = g.edata[f"{mode}_feat"][eids]
-        x = self.encode_time(x)
+        tx = g.edata["timestamp"][eids]
+        x = self.encode_time(x, t - tx)
         return self.fc(self.dropout(x))
 
 
