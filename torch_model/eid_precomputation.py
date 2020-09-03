@@ -64,7 +64,7 @@ def _deg_indices_full(g):
     src_deg_indices = src_deg_indices[torch.argsort(eids)]
     u, v, eids = g.in_edges(g.nodes(), 'all')
     etime = g.edata["timestamp"][eids].cpu()
-    degs = g.out_degrees()
+    degs = g.in_degrees()
     dst_deg_indices = upper_bound_cpp.upper_bound_full(v, etime, degs)
     dst_deg_indices = dst_deg_indices[torch.argsort(eids)]
     return {"src_deg_indices": src_deg_indices.add_(-1),
@@ -82,17 +82,19 @@ def _par_deg_indices_full(g):
     src_deg_indices = src_deg_indices[torch.argsort(eids)]
     u, v, eids = g.in_edges(g.nodes(), 'all')
     etime = g.edata["timestamp"][eids].cpu()
-    degs = g.out_degrees()
+    degs = g.in_degrees()
     dst_deg_indices = upper_bound_cpp.upper_bound_full_par(v, etime, degs)
     dst_deg_indices = dst_deg_indices[torch.argsort(eids)]
     return {"src_deg_indices": src_deg_indices.add_(-1),
             "dst_deg_indices": dst_deg_indices.add(-1)}
 
 
-@timeit
+# @timeit
 def _latest_edge(g, u, t, mode="in"):
     # Assume the timestamp is non-descending for each node, otherwise the cpp
     # extension will give wrong answers.
+    idx = torch.argsort(t)
+    u, t = u[idx], t[idx]
     assert torch.all(t[1:] - t[:-1] >=
                      0), "Timestamp tensor is not non-descending."
     sg = dgl.DGLGraph()
@@ -101,9 +103,12 @@ def _latest_edge(g, u, t, mode="in"):
     sg.edata["timestamp"] = t.cpu().clone().detach()
 
     nodes = u.unique()
-    degs = g.in_degrees(nodes)
-    eids = g.in_edges(
-        nodes, 'eid') if mode == "in" else g.out_edges(nodes, 'eid')
+    if mode == "in":
+        degs = g.in_degrees(nodes)
+        eids = g.in_edges(nodes, "eid")
+    elif mode == "out":
+        degs = g.out_degrees(nodes)
+        eids = g.out_edges(nodes, "eid")
     etime = g.edata["timestamp"][eids].to(sg.edata["timestamp"])
 
     sdegs = sg.in_degrees(nodes)
@@ -111,7 +116,9 @@ def _latest_edge(g, u, t, mode="in"):
     setime = sg.edata["timestamp"][seids]
     refer_eids = upper_bound_cpp.refer_latest_edge(
         nodes, degs, eids, etime, nodes, sdegs, seids, setime)
-    return refer_eids[torch.argsort(seids)]
+    ans_eids = torch.zeros_like(refer_eids)
+    ans_eids[idx] = refer_eids[torch.argsort(seids)]
+    return ans_eids
 
 
 # @timeit
