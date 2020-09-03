@@ -101,9 +101,10 @@ def negative_sampling(df, nodes, node2id):
     return df
 
 
-def train_test_label(root_dir="/nfs/zty/Graph/"):
+def train_test_label(args, root_dir="/nfs/zty/Graph/"):
     # nodes, edges, d_avg, d_max, timespan(days)
     fname = _iterate_datasets()
+    fname = fname[args.start: args.end]
     input_dirs = ["train_data", "valid_data", "test_data"]
     for name in fname:
         print("*****{}*****".format(name))
@@ -113,6 +114,11 @@ def train_test_label(root_dir="/nfs/zty/Graph/"):
             print("*****{}*****".format(indir))
             edges, nodes = _load_data(dataset=name, mode=indir)
             id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
+            if len(nodes["role"].unique()) > 1:
+                nodes = nodes[nodes["role"] == "item"]
+                min_dst_idx = nodes["id_map"].min()
+                nodes["id_map"] = nodes["id_map"] - min_dst_idx
+                id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
             label_df = negative_sampling(edges, nodes["node_id"].to_numpy(), id2idx)
             path = os.path.join(root_dir, outdir, f"{name}.edges")
             label_df.to_csv(path, index=None)
@@ -124,6 +130,9 @@ def config_parser():
     parser = argparse.ArgumentParser("Configuration for a unified train-valid-test preprocesser.")
     parser.add_argument(
         "--task", "-t", choices=["datastat", "datasplit", "datalabel"], required=True)
+    parser.add_argument("--start", type=int, default=0, help="Datset start index.")
+    parser.add_argument("--end", type=int, default=100,
+                    help="Datset end index (exclusive).")
     parser.add_argument("--train-ratio", "-tr", type=float,
                         default=0.70, help="Train dataset ratio.")
     parser.add_argument("--valid-ratio", "-vr", type=float, default=0.05,
@@ -145,7 +154,7 @@ if __name__ == "__main__":
     elif args.task == "datasplit":
         train_test_split(args)
     elif args.task == "datalabel":
-        train_test_label()
+        train_test_label(args)
     # data_stats(project_dir="/nfs/zty/Graph/test_data")
     # to_dataframe()
     # train_test2idx()
