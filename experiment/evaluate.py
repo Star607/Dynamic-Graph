@@ -22,11 +22,12 @@ parser.add_argument("--method", type=str, default="node2vec",
                     help="Contrastive method name.")
 parser.add_argument("--n_jobs", type=int, default=16,
                     help="Job numbers for joblib Parallel function.")
-parser.add_argument("--dataset", type=str,
+parser.add_argument("-d", "--dataset", type=str,
                     default="all", help="Specific dataset for experiments; default is all datasets.")
 parser.add_argument("--start", type=int, default=0, help="Datset start index.")
 parser.add_argument("--end", type=int, default=14,
                     help="Datset end index (exclusive).")
+parser.add_argument("--gid", type=int, default=0)
 parser.add_argument("--run", action="store_true", default=False,
                     help="Whether running embeddings.")
 parser.add_argument("--times", type=int, default=1,
@@ -294,10 +295,10 @@ def evaluate_gta():
 def evaluate_tgat(project_dir="/nfs/zty/Graph/TGAT-bk"):
     fname = iterate_datasets(dataset=args.dataset)
     fname = fname[args.start: args.end]
-    command = "python {}/exper_edge.py -d {}"
+    command = "python {}/exper_edge.py -d {} --gpu {}"
     commands = []
     for name in fname:
-        commands.append(command.format(project_dir, name))
+        commands.append(command.format(project_dir, name, args.gid))
     os.chdir(project_dir)
     print("Preprocessing finished.")
     for cmd in commands:
