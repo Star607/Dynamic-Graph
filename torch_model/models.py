@@ -72,7 +72,8 @@ class TGraphSAGE(nn.Module):
 class NegativeSampler(object):
     def __init__(self, g, k):
         # self.weights = g.in_degrees().float() ** 0.75
-        self.n_nodes = g.number_of_nodes()
+        self.dst_nodes = torch.where(g.in_degrees() > 0)[0]
+        self.n_nodes = self.dst_nodes.shape[0]
         self.k = k
 
     def __call__(self, g, src_eids):
@@ -80,6 +81,7 @@ class NegativeSampler(object):
         n = len(src)
         # dst = self.weights.multinomial(self.k * n, replacement=True)
         dst = torch.randint(self.n_nodes, (self.k * n,))
+        dst = self.dst_nodes[dst]
         src = src.repeat_interleave(self.k * n)
         return src, dst
 
@@ -105,9 +107,10 @@ class TemporalLinkTrainer(nn.Module):
     def __init__(self, g, in_feats, n_hidden, out_feats, args, 
                 remain_history=True):
         super(TemporalLinkTrainer, self).__init__()
+        self.nfeat = g.ndata["nfeat"]
+        self.efeat = g.edata["efeat"]
         self.logger = logging.getLogger()
         if args.trainable and g.ndata["nfeat"].requires_grad:
-            self.nfeat = g.ndata["nfeat"]
             self.logger.info(
                 "Optimization includes randomly initialized dim-{} node embeddings.".format(self.nfeat.shape[-1]))
         else:
@@ -215,6 +218,7 @@ def prepare_dataset(dataset):
     tmax, tmin = edges["timestamp"].max(), edges["timestamp"].min()
     def scaler(s): return (s - tmin) / (tmax - tmin)
     edges["timestamp"] = scaler(edges["timestamp"])
+    train_labels["timestamp"] = scaler(train_labels["timestamp"])
     val_labels["timestamp"] = scaler(val_labels["timestamp"])
     test_labels["timestamp"] = scaler(test_labels["timestamp"])
     return nodes, edges, train_labels, val_labels, test_labels
@@ -265,8 +269,8 @@ def eval_linkpred(model, g, df, batch_size=None):
     return acc, f1, auc
 
 
-def write_result(val_auc, metrics, dataset, params):
-    res_path = "results/{}-GTC.csv".format(dataset)
+def write_result(val_auc, metrics, dataset, params, postfix="GTC"):
+    res_path = "results/{}-{}.csv".format(dataset, postfix)
     headers = ["method", "dataset", "valid_auc",
                "accuracy", "f1", "auc", "params"]
     acc, f1, auc = metrics
@@ -310,6 +314,8 @@ def main(args, logger):
 
     # Set DGLGraph, node_features, edge_features, and edge timestamps.
     g = construct_dglgraph(edges, nodes, device, bidirected=args.bidirected)
+    if not args.trainable:
+        g.ndata["nfeat"] = torch.zeros_like(g.ndata["nfeat"])
     # For each entry in the adjacency list `u: (v, t)` of node `u`, compute
     # the related upper_bound with respect to `t`. So that we can use `cumsum`
     # or `cummax` to accelerate the computation speed. Otherwise, we have to
@@ -335,11 +341,11 @@ def main(args, logger):
         p.register_hook(lambda grad: torch.clamp(
             grad, -args.clip, args.clip))
 
-    # Only use positive edges, so we have to multiply eids with 2.
+    # Only use positive edges, so we have to divide eids by 2.
     train_eids = np.arange(train_labels.shape[0] // 2)
     num_batch = np.int(np.ceil(len(train_eids) / args.batch_size))
     epoch_bar = trange(args.epochs, disable=(not args.display))
-    early_stopper = EarlyStopMonitor(max_round=5)
+    early_stopper = EarlyStopMonitor(max_round=3)
     for epoch in epoch_bar:
         np.random.shuffle(train_eids)
         batch_bar = trange(num_batch, disable=(not args.display))
@@ -396,13 +402,16 @@ def main(args, logger):
               "weight_decay": args.weight_decay,
               "lambda": args.lam}
     write_result(val_auc, (acc, f1, auc), args.dataset, params)
+    MODEL_SAVE_PATH = f'./saved_models/{args.dataset}-{args.agg_type}.pth'
+    model = model.cpu()
+    torch.save(model.state_dict(), MODEL_SAVE_PATH)
 
 
 def parse_args():
     import socket
     parser = argparse.ArgumentParser(description='Temporal GraphSAGE')
     parser.add_argument("--dataset", type=str, default="ia-contact")
-    parser.add_argument("--no-bidirected", dest="bidirected", action="store_false",
+    parser.add_argument("--directed", dest="bidirected", action="store_false",
                         help="For bipartite graphs, set this as False.")
     parser.add_argument("--bidirected", dest="bidirected", action="store_true",
                         help="For non-bipartite graphs, set this as True.")
@@ -421,11 +430,11 @@ def parse_args():
                         help="learning rate")
     parser.add_argument("--no-trainable", "-nt", dest="trainable", action="store_false")
     parser.add_argument("--norm", action="store_true")
-    parser.add_argument("--epochs", type=int, default=100,
+    parser.add_argument("--epochs", type=int, default=50,
                         help="number of training epochs")
     parser.add_argument("--time-encoding", "-te", type=str, default="cosine",
                         help="Time encoding function.", choices=["concat", "cosine", "outer"])
-    parser.add_argument("--batch-size", type=int, default=1024)
+    parser.add_argument("-bs", "--batch-size", type=int, default=1024)
     parser.add_argument("--n-hidden", type=int, default=128,
                         help="number of hidden gcn units")
     parser.add_argument("--n-layers", type=int, default=2,
