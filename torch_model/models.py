@@ -364,7 +364,7 @@ def main(args, logger):
     train_eids = np.arange(train_labels.shape[0] // 2)
     num_batch = np.int(np.ceil(len(train_eids) / args.batch_size))
     epoch_bar = trange(args.epochs, disable=(not args.display))
-    early_stopper = EarlyStopMonitor(max_round=3)
+    early_stopper = EarlyStopMonitor(max_round=5)
     for epoch in epoch_bar:
         np.random.shuffle(train_eids)
         batch_bar = trange(num_batch, disable=(not args.display))
