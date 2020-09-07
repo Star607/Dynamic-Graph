@@ -3,6 +3,7 @@ from datetime import datetime
 import itertools
 import logging
 import os
+import random
 import sys
 import time
 
@@ -27,6 +28,14 @@ import upper_bound_cpp
 # Change the order so that it is the one used by "nvidia-smi" and not the
 # one used by all other programs ("FASTEST_FIRST")
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
+
+def set_random_seed():
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 class TGraphSAGE(nn.Module):
@@ -85,9 +94,11 @@ class NegativeSampler(object):
         src = src.repeat_interleave(self.k * n)
         return src, dst
 
+
 class HistorySampler(object):
     def __init__(self, g, k):
-        self.id2eids = [g.out_edges(i, 'eid') for i in range(g.number_of_nodes())]
+        self.id2eids = [g.out_edges(i, 'eid')
+                        for i in range(g.number_of_nodes())]
         self.deg_indices = g.edata["src_deg_indices"]
         self.k = k
 
@@ -95,21 +106,25 @@ class HistorySampler(object):
         src, _ = g.find_edges(src_eids)
         n = len(src)
         upper_ = self.deg_indices[src_eids].add(1).view(-1, 1)
-        cand_indices = (torch.rand(n, self.k).to(upper_.device) * upper_).long().view(-1)
-        cand_eids = [self.id2eids[node][i]  for node, i in zip(src, cand_indices)]
+        cand_indices = (torch.rand(n, self.k).to(
+            upper_.device) * upper_).long().view(-1)
+        cand_eids = [self.id2eids[node][i]
+                     for node, i in zip(src, cand_indices)]
         if remain_history:
             return cand_eids
         else:
             return g.find_edges(cand_eids)
-        
+
 
 class TemporalLinkTrainer(nn.Module):
-    def __init__(self, g, in_feats, n_hidden, out_feats, args, 
-                remain_history=True):
+    def __init__(self, g, in_feats, n_hidden, out_feats, args,
+                 remain_history=False):
         super(TemporalLinkTrainer, self).__init__()
         self.nfeat = g.ndata["nfeat"]
         self.efeat = g.edata["efeat"]
         self.logger = logging.getLogger()
+        self.logger.info("nfeat: %r, efeat: %r",
+                         self.nfeat.requires_grad, self.efeat.requires_grad)
         if args.trainable and g.ndata["nfeat"].requires_grad:
             self.logger.info(
                 "Optimization includes randomly initialized dim-{} node embeddings.".format(self.nfeat.shape[-1]))
@@ -159,7 +174,8 @@ class TemporalLinkTrainer(nn.Module):
             self.n_neg), neg_eids, t.repeat(self.n_neg)).squeeze()
         loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
         loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
-        loss += self.lam * self.contrastive(g, t, src_eids, pos_logits, neg_logits)
+        loss += self.lam * \
+            self.contrastive(g, t, src_eids, pos_logits, neg_logits)
         return loss
 
     def contrastive(self, g, t, src_eids, pos_logits, neg_logits):
@@ -174,6 +190,8 @@ class TemporalLinkTrainer(nn.Module):
             _, cands = self.hist_sampler(g, src_eids, False)
             contra_eids = LatestNodeInteractionFinder(g, cands, t, mode="in")
         contra_logits = self.pred(g, src_eids, contra_eids, t).squeeze()
+        pos_logits, neg_logits, contra_logits = (
+            p.sigmoid() for p in [pos_logits, neg_logits, contra_logits])
         if self.pos_contra:
             loss += self.margin(pos_logits.repeat(self.n_hist),
                                 contra_logits, torch.ones_like(contra_logits))
@@ -193,8 +211,9 @@ class TemporalLinkTrainer(nn.Module):
         g.edata["src_feat"] = src_feat
         g.edata["dst_feat"] = dst_feat
 
-        u, v, t = edges[0], edges[1], torch.tensor(
-            edges[2]).float().to(g.ndata["deg"].device)
+        device = self.nfeat.device
+        u, v, t = (torch.tensor(tv).to(device) for tv in edges[0:3])
+        t = t.float()
         src_eids = LatestNodeInteractionFinder(g, u, t, mode="out")
         dst_eids = LatestNodeInteractionFinder(g, v, t, mode="in")
         logits = self.pred(g, src_eids, dst_eids, t)
@@ -291,7 +310,7 @@ def write_result(val_auc, metrics, dataset, params, postfix="GTC"):
 
 
 def main(args, logger):
-    
+
     logger.info(args)
 
     # Set device utility.
@@ -394,7 +413,7 @@ def main(args, logger):
     acc, f1, auc = eval_linkpred(model, g, test_labels)
     params = {"best_epoch": early_stopper.best_epoch,
               "bidirected": args.bidirected, "trainable": trainable,
-              "norm": norm, "pos_contra": args.pos_contra, 
+              "norm": norm, "pos_contra": args.pos_contra,
               "neg_contra": args.neg_contra, "lr": lr,
               "n_hist": args.n_hist,
               "n_neg": args.n_neg, "n_layers": args.n_layers,
@@ -410,7 +429,7 @@ def main(args, logger):
 def parse_args():
     import socket
     parser = argparse.ArgumentParser(description='Temporal GraphSAGE')
-    parser.add_argument("--dataset", type=str, default="ia-contact")
+    parser.add_argument("-d", "--dataset", type=str, default="ia-contact")
     parser.add_argument("--directed", dest="bidirected", action="store_false",
                         help="For bipartite graphs, set this as False.")
     parser.add_argument("--bidirected", dest="bidirected", action="store_true",
@@ -423,12 +442,14 @@ def parse_args():
     parser.add_argument("--no-gpu", dest="gpu", action="store_false",
                         help="Whether use GPU.")
     hostname = socket.gethostname()
-    parser.add_argument("--hostname", action="store_const", const=hostname, default=hostname)
+    parser.add_argument("--hostname", action="store_const",
+                        const=hostname, default=hostname)
     parser.add_argument("--gid", type=int, default=-1,
                         help="Specify GPU id.")
     parser.add_argument("--lr", type=float, default=1e-2,
                         help="learning rate")
-    parser.add_argument("--no-trainable", "-nt", dest="trainable", action="store_false")
+    parser.add_argument("--no-trainable", "-nt",
+                        dest="trainable", action="store_false")
     parser.add_argument("--norm", action="store_true")
     parser.add_argument("--epochs", type=int, default=50,
                         help="number of training epochs")
@@ -443,17 +464,19 @@ def parse_args():
                         help="number of negative samples")
     parser.add_argument("--pos-contra", "-pc", action="store_true")
     parser.add_argument("--neg-contra", '-nc', action="store_true")
-    parser.add_argument("--lam", type=float, default=0.1, help="Weight for contrastive loss.")
-    parser.add_argument("--remain-history", "-rh", "-hist", action="store_true")
+    parser.add_argument("--lam", type=float, default=0.1,
+                        help="Weight for contrastive loss.")
+    parser.add_argument("--remain-history", "-rh",
+                        "-hist", action="store_true")
     parser.add_argument("--n-hist", type=int, default=1,
                         help="number of history samples")
-    parser.add_argument("--margin", type=float, default=0.5)
+    parser.add_argument("--margin", type=float, default=0.1)
     parser.add_argument("--weight-decay", type=float, default=1e-5,
                         help="Weight for L2 loss")
     parser.add_argument("--clip", type=float, default=5.0,
                         help="Clip gradients by value.")
     parser.add_argument("--agg-type", type=str, default="gcn",
-                        help="Aggregator type: mean/gcn/pool/lstm/cosine")
+                        help="Aggregator type: mean/gcn/pool")
     parser.add_argument("--display", dest="display", action="store_true")
     parser.add_argument("--no-display", dest="display", action="store_false"
                         )
@@ -465,4 +488,6 @@ if __name__ == "__main__":
     parser = parse_args()
     args = parser.parse_args()
     logger = set_logger()
+    set_random_seed()
+    logger.info("Set random seeds.")
     main(args, logger)

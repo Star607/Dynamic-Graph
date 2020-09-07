@@ -19,6 +19,7 @@ parser.add_argument("--display", dest="display", action="store_true")
 args = parser.parse_args()
 logger.info(args)
 
+
 def iterate_times(method):
     def worker(*ar, **kw):
         results = []
@@ -29,10 +30,13 @@ def iterate_times(method):
         return results
     return worker
 
+
 @iterate_times
 def evaluate():
-    fname = _iterate_datasets()
-    fname = fname[args.start: args.end]
+    # fname = _iterate_datasets()
+    # fname = fname[args.start: args.end]
+    fname = ["ia-workplace-contacts", "ia-contacts_hypertext2009", "ia-contact", "fb-forum", "soc-sign-bitcoinotc", "ia-escorts-dynamic",
+             "ia-retweet-pol", "ia-movielens-user2tags-10m", "soc-wiki-elec", "ia-slashdot-reply-dir", "ia-frwikinews-user-edits"]
     cmds = []
     if args.display:
         default = " --dataset {} --bidirected --gpu --gid {} --display "
@@ -40,16 +44,20 @@ def evaluate():
         default = " --dataset {} --bidirected --gpu --gid {} --no-display "
     # cmds.append(default + "-te concat")
     cmds.append(default)
+    cmds.append(default + " -pc -nc --lam 0.25")
+    cmds.append(default + " -pc -nc --lam 0.5")
+    cmds.append(default + " -pc -nc --lam 1.0")
     # cmds.append(default + "-te outer")
-    cmds.append(default + "-pc")
-    cmds.append(default + "-nc")
+    # cmds.append(default + "-pc")
+    # cmds.append(default + "-nc")
     # cmds.append(default + "-pc -nc -te concat")
-    cmds.append(default + "-pc -nc")
+    # cmds.append(default + "-pc -nc")
     # cmds.append(default + "-pc -nc -te outer")
     for data in fname:
         for cmd in cmds:
             margs = parse_args().parse_args(cmd.format(data, args.gid).split())
             main(margs, logger)
+
 
 if __name__ == "__main__":
     evaluate()
