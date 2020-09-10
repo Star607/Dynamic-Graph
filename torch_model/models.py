@@ -419,7 +419,8 @@ def main(args, logger):
               "n_neg": args.n_neg, "n_layers": args.n_layers,
               "time_encoding": args.time_encoding, "dropout": args.dropout,
               "weight_decay": args.weight_decay,
-              "lambda": args.lam}
+              "lambda": args.lam,
+              "margin": args.margin}
     write_result(val_auc, (acc, f1, auc), args.dataset, params)
     MODEL_SAVE_PATH = f'./saved_models/{args.dataset}-{args.agg_type}.pth'
     model = model.cpu()
@@ -464,7 +465,7 @@ def parse_args():
                         help="number of negative samples")
     parser.add_argument("--pos-contra", "-pc", action="store_true")
     parser.add_argument("--neg-contra", '-nc', action="store_true")
-    parser.add_argument("--lam", type=float, default=0.1,
+    parser.add_argument("--lam", type=float, default=1.0,
                         help="Weight for contrastive loss.")
     parser.add_argument("--remain-history", "-rh",
                         "-hist", action="store_true")
