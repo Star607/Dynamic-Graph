@@ -172,10 +172,11 @@ class TemporalLinkTrainer(nn.Module):
         pos_logits = self.pred(g, src_eids, dst_eids, t).squeeze()
         neg_logits = self.pred(g, src_eids.repeat(
             self.n_neg), neg_eids, t.repeat(self.n_neg)).squeeze()
-        loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
-        loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
-        loss += self.lam * \
-            self.contrastive(g, t, src_eids, pos_logits, neg_logits)
+        # loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
+        # loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
+        # loss += self.lam * \
+        #     self.contrastive(g, t, src_eids, pos_logits, neg_logits)
+        loss = self.contrastive(g, t, src_eids, pos_logits, neg_logits)
         return loss
 
     def contrastive(self, g, t, src_eids, pos_logits, neg_logits):
@@ -353,8 +354,13 @@ def main(args, logger):
     model = TemporalLinkTrainer(
         g, in_feats, args.n_hidden, args.n_hidden, args)
     model = model.to(device)
-    optimizer = torch.optim.Adam(
+    if args.opt == "Adam":
+        optimizer = torch.optim.Adam(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    elif args.opt == "SGD":
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        raise NotImplementedError(args.opt)
     # clip gradients by value: https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
     for p in model.parameters():
         p.register_hook(lambda grad: torch.clamp(
@@ -370,11 +376,11 @@ def main(args, logger):
         batch_bar = trange(num_batch, disable=(not args.display))
         for idx in batch_bar:
             model.train()
+            optimizer.zero_grad()
             batch_eids = train_eids[idx * args.batch_size:
                                     (idx + 1) * args.batch_size]
             mul = 2 if args.bidirected else 1
             loss = model(g, batch_eids * mul)
-            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
@@ -413,6 +419,7 @@ def main(args, logger):
     acc, f1, auc = eval_linkpred(model, g, test_labels)
     params = {"best_epoch": early_stopper.best_epoch,
               "bidirected": args.bidirected, "trainable": trainable,
+              "opt": args.opt,
               "norm": norm, "pos_contra": args.pos_contra,
               "neg_contra": args.neg_contra, "lr": lr,
               "n_hist": args.n_hist,
@@ -447,6 +454,7 @@ def parse_args():
                         const=hostname, default=hostname)
     parser.add_argument("--gid", type=int, default=-1,
                         help="Specify GPU id.")
+    parser.add_argument("--opt", choices=["Adam", "SGD"], default="Adam")
     parser.add_argument("--lr", type=float, default=1e-2,
                         help="learning rate")
     parser.add_argument("--no-trainable", "-nt",

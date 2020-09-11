@@ -34,7 +34,7 @@ def iterate_times(method):
 @iterate_times
 def evaluate():
     # fname = _iterate_datasets()
-    fname = ["ia-workplace-contacts", "ia-contacts_hypertext2009", "ia-contact", "fb-forum", "soc-sign-bitcoinotc", "ia-escorts-dynamic",
+    fname = ["ia-workplace-contacts", "ia-contact", "fb-forum", "soc-sign-bitcoinotc", "ia-escorts-dynamic",
              "ia-retweet-pol", "ia-movielens-user2tags-10m", "soc-wiki-elec", "ia-slashdot-reply-dir", "ia-frwikinews-user-edits"]
     fname = fname[args.start: args.end]
     cmds = []
@@ -43,9 +43,10 @@ def evaluate():
     else:
         default = " --dataset {} --bidirected --gpu --gid {} --no-display "
     # cmds.append(default + "-te concat")
-    # cmds.append(default + " -pc -nc --margin 0.1")
+    cmds.append(default + " -pc -nc --margin 0.1")
     cmds.append(default + " -pc -nc --margin 0.2")
     cmds.append(default + " -pc -nc --margin 0.4")
+    cmds.append(default + " -pc -nc --margin 0.8")
     # cmds.append(default + "-te outer")
     # cmds.append(default + "-pc")
     # cmds.append(default + "-nc")
