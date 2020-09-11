@@ -172,11 +172,11 @@ class TemporalLinkTrainer(nn.Module):
         pos_logits = self.pred(g, src_eids, dst_eids, t).squeeze()
         neg_logits = self.pred(g, src_eids.repeat(
             self.n_neg), neg_eids, t.repeat(self.n_neg)).squeeze()
-        # loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
-        # loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
-        # loss += self.lam * \
-        #     self.contrastive(g, t, src_eids, pos_logits, neg_logits)
-        loss = self.contrastive(g, t, src_eids, pos_logits, neg_logits)
+        loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
+        loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
+        loss += self.lam * \
+            self.contrastive(g, t, src_eids, pos_logits, neg_logits)
+        # loss = self.contrastive(g, t, src_eids, pos_logits, neg_logits)
         return loss
 
     def contrastive(self, g, t, src_eids, pos_logits, neg_logits):

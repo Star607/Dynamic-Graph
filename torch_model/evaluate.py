@@ -39,9 +39,9 @@ def evaluate():
     fname = fname[args.start: args.end]
     cmds = []
     if args.display:
-        default = " --dataset {} --bidirected --gpu --gid {} --display "
+        default = " --dataset {} --bidirected --gpu --gid {} --display --opt SGD "
     else:
-        default = " --dataset {} --bidirected --gpu --gid {} --no-display "
+        default = " --dataset {} --bidirected --gpu --gid {} --no-display --opt SGD "
     # cmds.append(default + "-te concat")
     cmds.append(default + " -pc -nc --margin 0.1")
     cmds.append(default + " -pc -nc --margin 0.2")
