@@ -158,7 +158,7 @@ def main(args, logger):
         np.random.shuffle(train_ids)
         batch_bar = trange(num_batch, disable=(not args.display))
         for idx in batch_bar:
-            model.train()
+            model.eval()
             batch_ids = train_ids[idx * batch_size: (idx + 1) * batch_size]
             node_ids = train_data.loc[batch_ids, "from_node_id"].to_numpy()
             ts = train_data.loc[batch_ids, "timestamp"].to_numpy()

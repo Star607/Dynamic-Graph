@@ -18,7 +18,9 @@ log/*
 cuda_example/*
 tf_op/*
 ckpt/*
+nc-comp-results/*
 comp_results/*
+nc-results/*
 results/*
 summarized_results/*
 saved_models/*

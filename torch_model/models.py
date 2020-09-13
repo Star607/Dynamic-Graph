@@ -419,17 +419,19 @@ def main(args, logger):
     acc, f1, auc = eval_linkpred(model, g, test_labels)
     params = {"best_epoch": early_stopper.best_epoch,
               "bidirected": args.bidirected, "trainable": trainable,
-              "opt": args.opt,
+              "opt": args.opt, "lr": args.lr,
+              "agg_type": args.agg_type,
               "norm": norm, "pos_contra": args.pos_contra,
-              "neg_contra": args.neg_contra, "lr": lr,
+              "neg_contra": args.neg_contra, 
               "n_hist": args.n_hist,
               "n_neg": args.n_neg, "n_layers": args.n_layers,
-              "time_encoding": args.time_encoding, "dropout": args.dropout,
-              "weight_decay": args.weight_decay,
+              "time_encoding": args.time_encoding, 
               "lambda": args.lam,
               "margin": args.margin}
     write_result(val_auc, (acc, f1, auc), args.dataset, params)
-    MODEL_SAVE_PATH = f'./saved_models/{args.dataset}-{args.agg_type}.pth'
+    lr = '%.4f'%(args.lr)
+    margin = '%.2f'%(args.margin)
+    MODEL_SAVE_PATH = f'./saved_models/{args.dataset}-{args.agg_type}-{lr}-{margin}.pth'
     model = model.cpu()
     torch.save(model.state_dict(), MODEL_SAVE_PATH)
 
