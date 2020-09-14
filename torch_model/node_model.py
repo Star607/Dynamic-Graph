@@ -228,8 +228,8 @@ def main(args, logger):
     _, _, val_auc = eval_nodeclass(embeds, lr_model, val_eids, val_data)
     acc, f1, auc = eval_nodeclass(embeds, lr_model, test_eids, test_data)
     params = {"best_epoch": early_stopper.best_epoch,
-              "batch_size": args.batch_size,
-              "sampling": args.sampling,
+              "batch_size": args.batch_size, "lr": args.lr,
+              "sampling": args.sampling, "pos_weight": args.pos_weight,
               "neg_ratio": args.neg_ratio}
     write_result(val_auc, (acc, f1, auc), args.dataset,
                  params, postfix="NC-GTC")
