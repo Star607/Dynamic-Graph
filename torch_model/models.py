@@ -396,7 +396,7 @@ def main(args, logger):
         epoch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
 
         lr = "%.4f" % args.lr
-        trainable = "train" if hasattr(model, "nfeat") else "no-train"
+        trainable = "train" if args.trainable else "no-train"
         norm = "norm" if hasattr(model, "norm") else "no-norm"
         pos = "pos" if model.pos_contra else "no-pos"
         neg = "neg" if model.neg_contra else "no-neg"
@@ -418,7 +418,7 @@ def main(args, logger):
     _, _, val_auc = eval_linkpred(model, g, val_labels)
     acc, f1, auc = eval_linkpred(model, g, test_labels)
     params = {"best_epoch": early_stopper.best_epoch,
-              "bidirected": args.bidirected, "trainable": trainable,
+              "bidirected": args.bidirected, "trainable": args.trainable,
               "opt": args.opt, "lr": args.lr,
               "agg_type": args.agg_type,
               "norm": norm, "pos_contra": args.pos_contra,

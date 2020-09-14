@@ -159,8 +159,17 @@ def main(args, logger):
     batch_size = args.batch_size
     num_batch = np.int(np.ceil(len(train_data) / batch_size))
     epoch_bar = trange(args.epochs, disable=(not args.display))
-    early_stopper = EarlyStopMonitor(max_round=5)
-    loss_fn = nn.BCEWithLogitsLoss()
+    early_stopper = EarlyStopMonitor(max_round=10)
+    if args.pos_weight:
+        if args.sampling == "balance":
+            pos_weight = torch.tensor(args.neg_ratio)
+        else:
+            pos_num = (train_data["state_label"] == 1).sum()
+            neg_num = (train_data["state_label"] == 0).sum()
+            pos_weight = torch.tensor(neg_num/pos_num/10)
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    else:
+        loss_fn = nn.BCEWithLogitsLoss()
     start = time.time()
     with torch.no_grad():
         g.ndata["deg"] = (g.in_degrees() +
@@ -178,12 +187,13 @@ def main(args, logger):
             tgcl.eval()
             lr_model.train()
 
-            # batch_ids = next(batch_sampler)
-            batch_ids = resample(
-                train_ids, n_samples=batch_size, stratify=train_data["state_label"])
-            # batch_ids = train_ids[idx * batch_size: (idx + 1) * batch_size]
-            node_ids = train_data.loc[batch_ids, "from_node_id"].to_numpy()
-            ts = train_data.loc[batch_ids, "timestamp"].to_numpy()
+            if args.sampling == "normal":
+                batch_ids = train_ids[idx * batch_size: (idx + 1) * batch_size]
+            elif args.sampling == "resample":
+                batch_ids = resample(
+                    train_ids, n_samples=batch_size, stratify=train_data["state_label"])
+            elif args.sampling == "balance":
+                batch_ids = next(batch_sampler)
             labels = train_data.loc[batch_ids, "state_label"].to_numpy()
 
             optimizer.zero_grad()
@@ -218,7 +228,6 @@ def main(args, logger):
     _, _, val_auc = eval_nodeclass(embeds, lr_model, val_eids, val_data)
     acc, f1, auc = eval_nodeclass(embeds, lr_model, test_eids, test_data)
     params = {"best_epoch": early_stopper.best_epoch,
-              "bidirected": args.bidirected,
               "batch_size": args.batch_size,
               "sampling": args.sampling,
               "neg_ratio": args.neg_ratio}
@@ -275,7 +284,8 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=50,
                         help="number of training epochs")
     parser.add_argument("-bs", "--batch-size", type=int, default=30)
-    parser.add_argument("--sampling", default="normal",
+    parser.add_argument("-pw", "--pos-weight", action="store_true")
+    parser.add_argument("--sampling", default="resample",
                         choices=["normal", "resample", "balance"])
     parser.add_argument("--neg-ratio", type=int, default=1)
     parser.add_argument("--gcn-lr", type=float, default=0.01)
