@@ -210,7 +210,7 @@ def main(args, logger):
         epoch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
 
         def ckpt_path(
-            epoch): return f'./nc-ckpt/{args.lr}-{args.batch_size}-{epoch}.pth'
+            epoch): return f'./nc-ckpt/{args.dataset}-{args.lr}-{args.batch_size}-{args.sampling}-{args.pos_weight}-{epoch}-{args.hostname}-{device.type}-{device.index}.pth'
         if early_stopper.early_stop_check(auc):
             logger.info('No improvment over {} epochs, stop training'.format(
                 early_stopper.max_round))
@@ -264,6 +264,7 @@ def edge_args(parser):
 
 
 def parse_args():
+    import socket
     # trainable, n_layers, dropout, agg_type, time_encoding, n_neg, n_hist, pos_contra, neg_contra, remain_history, lam, norm
     parser = argparse.ArgumentParser(description='Temporal GraphSAGE')
     parser.add_argument("-d", "--dataset", type=str, default="JODIE-wikipedia",
@@ -273,6 +274,9 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.2,
                         help="dropout probability")
     parser.add_argument("--log-file", action="store_true")
+    hostname = socket.gethostname()
+    parser.add_argument("--hostname", action="store_const",
+                        const=hostname, default=hostname)
     parser.add_argument("--gpu", dest="gpu", action="store_true",
                         help="Whether use GPU.")
     parser.add_argument("--no-gpu", dest="gpu", action="store_false",
@@ -283,7 +287,7 @@ def parse_args():
                         help="learning rate")
     parser.add_argument("--epochs", type=int, default=50,
                         help="number of training epochs")
-    parser.add_argument("-bs", "--batch-size", type=int, default=30)
+    parser.add_argument("-bs", "--batch-size", type=int, default=128)
     parser.add_argument("-pw", "--pos-weight", action="store_true")
     parser.add_argument("--sampling", default="resample",
                         choices=["normal", "resample", "balance"])
