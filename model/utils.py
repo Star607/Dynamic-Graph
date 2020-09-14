@@ -20,7 +20,6 @@ class EarlyStopMonitor(object):
         self.tolerance = tolerance
 
     def early_stop_check(self, curr_val):
-        self.epoch_count += 1
 
         if not self.higher_better:
             curr_val *= -1
@@ -32,6 +31,7 @@ class EarlyStopMonitor(object):
             self.best_epoch = self.epoch_count
         else:
             self.num_round += 1
+        self.epoch_count += 1
         return self.num_round >= self.max_round
 
 
