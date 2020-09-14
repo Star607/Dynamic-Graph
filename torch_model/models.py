@@ -290,7 +290,7 @@ def eval_linkpred(model, g, df, batch_size=None):
 
 
 def write_result(val_auc, metrics, dataset, params, postfix="GTC"):
-    res_path = "results/{}-{}.csv".format(dataset, postfix)
+    res_path = "nc-results/{}-{}.csv".format(dataset, postfix)
     headers = ["method", "dataset", "valid_auc",
                "accuracy", "f1", "auc", "params"]
     acc, f1, auc = metrics
@@ -430,8 +430,9 @@ def main(args, logger):
               "margin": args.margin}
     write_result(val_auc, (acc, f1, auc), args.dataset, params)
     lr = '%.4f'%(args.lr)
-    margin = '%.2f'%(args.margin)
-    MODEL_SAVE_PATH = f'./saved_models/{args.dataset}-{args.agg_type}-{lr}-{margin}.pth'
+    lam = '%.1f' % args.lam
+    margin = '%.1f'%(args.margin)
+    MODEL_SAVE_PATH = f'./saved_models/{args.dataset}-{args.agg_type}-{lr}-{lam}-{margin}.pth'
     model = model.cpu()
     torch.save(model.state_dict(), MODEL_SAVE_PATH)
 

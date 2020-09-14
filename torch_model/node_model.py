@@ -16,12 +16,14 @@ import torch.nn as nn
 from torch.nn import functional as F
 from tqdm import trange
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.utils import resample
 
 from data_loader.data_util import load_data, load_split_edges, load_label_edges
 from model.utils import get_free_gpu, timeit, EarlyStopMonitor
 from torch_model.util_dgl import set_logger, construct_dglgraph
 from torch_model.layers import TemporalNodeLayer, TSAGEConv
 from torch_model.eid_precomputation import _prepare_deg_indices, _par_deg_indices, _deg_indices_full, _par_deg_indices_full, _latest_edge, LatestNodeInteractionFinder
+from .models import TemporalLinkTrainer
 # A cpp extension computing upper_bound along the last dimension of an non-decreasing matrix. It saves huge memory use.
 import upper_bound_cpp
 
@@ -29,44 +31,21 @@ import upper_bound_cpp
 # one used by all other programs ("FASTEST_FIRST")
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
+class LR(torch.nn.Module):
+    def __init__(self, dim, drop=0.1):
+        super().__init__()
+        self.fc_1 = torch.nn.Linear(dim, 80)
+        self.fc_2 = torch.nn.Linear(80, 10)
+        self.fc_3 = torch.nn.Linear(10, 1)
+        self.act = torch.nn.ReLU()
+        self.dropout = torch.nn.Dropout(p=drop, inplace=True)
 
-class TemporalNodeTrainer(nn.Module):
-    def __init__(self, g, in_feats, n_hidden, out_feats, args):
-        super(TemporalNodeTrainer, self).__init__()
-        self.logger = logging.getLogger()
-        self.nfeat = g.ndata["nfeat"]
-        self.efeat = g.edata["efeat"]
-        self.conv = TGraphSAGE(in_feats, n_hidden, out_feats,
-                               args.n_layers, F.relu, args.dropout,
-                               args.agg_type, args.time_encoding)
-        self.pred = TemporalNodeLayer(
-            out_feats, 1, time_encoding=args.time_encoding)
-        self.loss_fn = nn.BCEWithLogitsLoss()
-        if args.norm:
-            self.norm = nn.LayerNorm(out_feats)
-
-    def forward(self, g, node_ids, ts, labels, bidirected=False):
-        logits = self.infer(g, node_ids, ts, bidirected=bidirected)
-        labels = torch.tensor(labels).to(self.nfeat).unsqueeze(-1)
-        loss = self.loss_fn(logits, labels)
-        return loss
-    
-    def infer(self, g, node_ids, ts, bidirected=False):
-        g = g.local_var()
-        node_ids, ts = torch.tensor(node_ids), torch.tensor(ts).to(self.nfeat)
-        g.ndata["deg"] = (g.in_degrees() +
-                          g.out_degrees()).to(g.ndata["nfeat"])
-        if bidirected:
-            g.ndata["deg"] /= 2
-        src_feat, dst_feat = self.conv(g)
-        if hasattr(self, "norm"):
-            src_feat, dst_feat = self.norm(src_feat), self.norm(dst_feat)
-        g.edata["src_feat"] = src_feat
-        g.edata["dst_feat"] = dst_feat
-
-        node_eids = _latest_edge(g, node_ids, ts, mode="out")
-        logits = self.pred(g, node_eids, ts)
-        return logits
+    def forward(self, x):
+        x = self.act(self.fc_1(x))
+        x = self.dropout(x)
+        x = self.act(self.fc_2(x))
+        x = self.dropout(x)
+        return self.fc_3(x).squeeze(dim=1)
 
 
 def prepare_node_dataset(dataset):
@@ -92,16 +71,15 @@ def prepare_node_dataset(dataset):
     return nodes, edges, train_labels, val_labels, test_labels
 
 
-def eval_nodeclass(model, g, val_data, batch_size=None):
+def eval_nodeclass(embeds, lr_model, eids, val_data, batch_size=None):
     if batch_size is None:
         batch_size = val_data.shape[0]
-    model.eval()
+    lr_model.eval()
     val_data = val_data.iloc[:batch_size]
     with torch.no_grad():
-        node_ids = val_data["from_node_id"].to_numpy()
-        ts = val_data["timestamp"].to_numpy()
+        batch_embeds = embeds[eids]
+        logits = lr_model(batch_embeds).sigmoid().cpu().numpy()
         labels = val_data["state_label"].to_numpy()
-        logits = model.infer(g, node_ids, ts).sigmoid().cpu().numpy()
         acc = accuracy_score(labels, logits >= 0.5)
         f1 = f1_score(labels, logits >= 0.5)
         auc = roc_auc_score(labels, logits)
@@ -140,73 +118,102 @@ def main(args, logger):
     # Set model configuration.
     # Input features: node_featurs + edge_features + time_encoding
     in_feats = (g.ndata["nfeat"].shape[-1] + g.edata["efeat"].shape[-1])
-    model = TemporalNodeTrainer(
-        g, in_feats, args.n_hidden, args.n_hidden, args)
-    model = model.to(device)
+    tgcl = TemporalLinkTrainer(g, in_feats, args.n_hidden, args.n_hidden, args) 
+    tgcl = tgcl.to(device)
+
+    logger.info("loading saved TGCL model")
+    gcn_lr = '%.4f' % args.gcn_lr
+    lam = '%.1f' % args.lam
+    margin = '%.1f' % args.margin
+    model_path = f"./saved_models/{args.dataset}-{args.agg_type}-{gcn_lr}-{lam}-{margin}.pth"
+    tgcl.load_state_dict(torch.load(model_path))
+    tgcl.eval()
+    logger.info("TGCL models loaded")
+    logger.info("Start training node classification task")
+
+    lr_model = LR(args.n_hidden * 2).to(device)
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    for p in model.parameters():
-        p.register_hook(lambda grad: torch.clamp(
-            grad, -args.clip, args.clip))
+        lr_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     train_ids = np.arange(len(train_data))
+    val_eids = len(train_data) + np.arange(len(val_data))
+    test_eids = len(train_data) + len(val_data) + np.arange(len(test_data))
     batch_size = args.batch_size
     num_batch = np.int(np.ceil(len(train_data) / batch_size))
     epoch_bar = trange(args.epochs, disable=(not args.display))
     early_stopper = EarlyStopMonitor(max_round=5)
+    loss_fn = nn.BCEWithLogitsLoss()
+    start = time.time()
+    with torch.no_grad():
+        g.ndata["deg"] = (g.in_degrees() +
+                          g.out_degrees()).to(g.ndata["nfeat"]) 
+        src_feat, dst_feat = tgcl.conv(g)
+        embeds = torch.cat((src_feat, dst_feat), dim=1)
+    logger.info("Convolution takes %.2f secs.", time.time() - start)
+
     for epoch in epoch_bar:
         np.random.shuffle(train_ids)
         batch_bar = trange(num_batch, disable=(not args.display))
         for idx in batch_bar:
-            model.eval()
-            batch_ids = train_ids[idx * batch_size: (idx + 1) * batch_size]
+            tgcl.eval()
+            lr_model.train()
+
+            batch_ids = resample(train_ids, n_samples=batch_size, stratify=train_data["state_label"])
+            # batch_ids = train_ids[idx * batch_size: (idx + 1) * batch_size]
             node_ids = train_data.loc[batch_ids, "from_node_id"].to_numpy()
             ts = train_data.loc[batch_ids, "timestamp"].to_numpy()
             labels = train_data.loc[batch_ids, "state_label"].to_numpy()
-            loss = model(g, node_ids, ts, labels)
+
             optimizer.zero_grad()
+            batch_embeds = embeds[batch_ids]
+            lr_prob = lr_model(batch_embeds)
+            loss = loss_fn(lr_prob, torch.tensor(labels).to(lr_prob))
             loss.backward()
             optimizer.step()
 
-            acc, f1, auc = eval_nodeclass(
-                model, g, val_data, batch_size=args.batch_size)
+            acc, f1, auc = eval_nodeclass(embeds, lr_model, val_eids, val_data)
             batch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
-        acc, f1, auc = eval_nodeclass(model, g, val_data)
+        acc, f1, auc = eval_nodeclass(embeds, lr_model, val_eids, val_data)
         epoch_bar.update()
         epoch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
 
-        lr = "%.4f" % args.lr
-        trainable = "train" if hasattr(model, "nfeat") else "no-train"
-        norm = "norm" if hasattr(model, "norm") else "no-norm"
-        def ckpt_path(
-            epoch): return f'./ckpt/{args.dataset}-{args.agg_type}-{trainable}-{norm}-{lr}-{epoch}-{args.hostname}-{device.type}-{device.index}.pth'
-        if early_stopper.early_stop_check(auc):
-            logger.info(
-                f"No improvement over {early_stopper.max_round} epochs.")
-            logger.info(
-                f'Loading the best model at epoch {early_stopper.best_epoch}')
-            model.load_state_dict(torch.load(
-                ckpt_path(early_stopper.best_epoch)))
-            logger.info(
-                f'Loaded the best model at epoch {early_stopper.best_epoch} for inference')
-            break
-        else:
-            torch.save(model.state_dict(), ckpt_path(epoch))
-    model.eval()
-    _, _, val_auc = eval_nodeclass(model, g, val_data)
-    acc, f1, auc = eval_nodeclass(model, g, test_data)
+    lr_model.eval()
+    _, _, val_auc = eval_nodeclass(embeds, lr_model, val_eids, val_data)
+    acc, f1, auc = eval_nodeclass(embeds, lr_model, test_eids, test_data)
     params = {"best_epoch": early_stopper.best_epoch,
-              "bidirected": args.bidirected, "trainable": trainable,
-              "norm": norm, "lr": lr,
-              "n_layers": args.n_layers,
-              "time_encoding": args.time_encoding, "dropout": args.dropout,
-              "weight_decay": args.weight_decay}
+              "bidirected": args.bidirected}
     write_result(val_auc, (acc, f1, auc), args.dataset,
                  params, postfix="NC-GTC")
 
+def edge_args(parser):
+    parser.add_argument("--norm", action="store_true")
+    parser.add_argument("--trainable", 
+                        dest="trainable", action="store_true")
+    parser.add_argument("--time-encoding", "-te", type=str, default="cosine",
+                        help="Time encoding function.", choices=["concat", "cosine", "outer"])
+    parser.add_argument("--n-hidden", type=int, default=128,
+                        help="number of hidden gcn units")
+    parser.add_argument("--n-layers", type=int, default=2,
+                        help="number of hidden gcn layers")
+    parser.add_argument("--n-neg", type=int, default=1,
+                        help="number of negative samples")
+    parser.add_argument("--pos-contra", "-pc", action="store_true")
+    parser.add_argument("--neg-contra", '-nc', action="store_true")
+    parser.add_argument("--lam", type=float, default=0.0,
+                        help="Weight for contrastive loss.")
+    parser.add_argument("--remain-history", "-rh",
+                        "-hist", action="store_true")
+    parser.add_argument("--n-hist", type=int, default=1,
+                        help="number of history samples")
+    parser.add_argument("--margin", type=float, default=0.1)
+    parser.add_argument("--weight-decay", type=float, default=1e-5,
+                        help="Weight for L2 loss")
+    parser.add_argument("--agg-type", type=str, default="gcn",
+                        help="Aggregator type: mean/gcn/pool")
+    return parser
 
 def parse_args():
-    import socket
+    # trainable, n_layers, dropout, agg_type, time_encoding, n_neg, n_hist, pos_contra, neg_contra, remain_history, lam, norm
     parser = argparse.ArgumentParser(description='Temporal GraphSAGE')
     parser.add_argument("-d", "--dataset", type=str, default="JODIE-wikipedia",
                         choices=["JODIE-wikipedia", "JODIE-mooc", "JODIE-reddit"])
@@ -219,34 +226,18 @@ def parse_args():
                         help="Whether use GPU.")
     parser.add_argument("--no-gpu", dest="gpu", action="store_false",
                         help="Whether use GPU.")
-    hostname = socket.gethostname()
-    parser.add_argument("--hostname", action="store_const",
-                        const=hostname, default=hostname)
     parser.add_argument("--gid", type=int, default=-1,
                         help="Specify GPU id.")
-    parser.add_argument("--lr", type=float, default=1e-2,
+    parser.add_argument("--lr", type=float, default=1e-4,
                         help="learning rate")
-    parser.add_argument("--trainable", "-train",
-                        dest="trainable", action="store_true")
-    parser.add_argument("--norm", action="store_true")
     parser.add_argument("--epochs", type=int, default=50,
                         help="number of training epochs")
-    parser.add_argument("--time-encoding", "-te", type=str, default="cosine",
-                        help="Time encoding function.", choices=["concat", "cosine", "outer"])
-    parser.add_argument("--batch-size", type=int, default=1024)
-    parser.add_argument("--n-hidden", type=int, default=128,
-                        help="number of hidden gcn units")
-    parser.add_argument("--n-layers", type=int, default=2,
-                        help="number of hidden gcn layers")
-    parser.add_argument("--weight-decay", type=float, default=1e-5,
-                        help="Weight for L2 loss")
-    parser.add_argument("--clip", type=float, default=5.0,
-                        help="Clip gradients by value.")
-    parser.add_argument("--agg-type", type=str, default="gcn",
-                        help="Aggregator type: mean/gcn/pool/lstm/cosine")
+    parser.add_argument("--batch-size", type=int, default=30)
+    parser.add_argument("--gcn-lr", type=float, default=0.01)
     parser.add_argument("--display", dest="display", action="store_true")
     parser.add_argument("--no-display", dest="display", action="store_false"
                         )
+    parser = edge_args(parser)
     return parser
 
 
