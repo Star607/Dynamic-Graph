@@ -66,6 +66,27 @@ def prepare_node_dataset(dataset):
     return nodes, edges, train_data, valid_data, test_data
 
 
+def stratified_batch(train_ids, labels, nbatch):
+    vals = list(np.unique(labels))
+    vids = [train_ids[labels == v] for v in vals]  # edge_ids for each value
+    vsize = [len(ids) // nbatch for ids in vids]  # batch_size for each value
+    for size, val in zip(vsize, vals):
+        assert size > 0, "Value {} is less than batch numbers.".format(val)
+    for idx in range(nbatch):
+        batch_ids = [ids[idx * vsize[i]: (idx + 1) * vsize[i]]
+                     for i, ids in enumerate(vids)]
+        yield np.concatenate(batch_ids)
+
+
+def balance_batch(train_ids, labels, nbatch, neg_ratio=1):
+    pos_ids = train_ids[labels == 1]
+    neg_ids = train_ids[labels == 0]
+    pos_ids = pos_ids.repeat(len(neg_ids) // (len(pos_ids) * neg_ratio))
+    train_ids = np.concatenate([pos_ids, neg_ids])
+    labels = np.concatenate([np.ones(len(pos_ids)), np.zeros(len(neg_ids))])
+    return stratified_batch(train_ids, labels, nbatch)
+
+
 def eval_nodeclass(embeds, lr_model, eids, val_data, batch_size=None):
     if batch_size is None:
         batch_size = val_data.shape[0]
@@ -98,8 +119,8 @@ def main(args, logger):
     # Load nodes, edges, and labeled dataset for training, validation and test.
     nodes, edges, train_data, val_data, test_data = prepare_node_dataset(
         args.dataset)
-    logger.info("Train, valid, test: %d, %d, %d", (train_data["state_label"] == 1).sum(), 
-        (val_data["state_label"] == 1).sum(), (test_data["state_label"] == 1).sum())
+    logger.info("Train, valid, test: %d, %d, %d", (train_data["state_label"] == 1).sum(),
+                (val_data["state_label"] == 1).sum(), (test_data["state_label"] == 1).sum())
     delta = edges["timestamp"].shift(-1) - edges["timestamp"]
     # Pandas loc[low:high] includes high, so we use slice operations here instead.
     assert np.all(delta[:len(delta) - 1] >= 0)
@@ -151,10 +172,13 @@ def main(args, logger):
     for epoch in epoch_bar:
         np.random.shuffle(train_ids)
         batch_bar = trange(num_batch, disable=(not args.display))
+        batch_sampler = balance_batch(
+            train_ids, train_data.loc[train_ids, "state_label"], num_batch)
         for idx in batch_bar:
             tgcl.eval()
             lr_model.train()
 
+            # batch_ids = next(batch_sampler)
             batch_ids = resample(
                 train_ids, n_samples=batch_size, stratify=train_data["state_label"])
             # batch_ids = train_ids[idx * batch_size: (idx + 1) * batch_size]
@@ -175,13 +199,17 @@ def main(args, logger):
         epoch_bar.update()
         epoch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
 
-        def ckpt_path(epoch): return f'./nc-ckpt/{args.lr}-{args.batch_size}-{epoch}.pth'
+        def ckpt_path(
+            epoch): return f'./nc-ckpt/{args.lr}-{args.batch_size}-{epoch}.pth'
         if early_stopper.early_stop_check(auc):
-            logger.info('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
-            logger.info(f'Loading the best model at epoch {early_stopper.best_epoch}')
+            logger.info('No improvment over {} epochs, stop training'.format(
+                early_stopper.max_round))
+            logger.info(
+                f'Loading the best model at epoch {early_stopper.best_epoch}')
             best_model_path = ckpt_path(early_stopper.best_epoch)
             lr_model.load_state_dict(torch.load(best_model_path))
-            logger.info(f'Loaded the best model at epoch {early_stopper.best_epoch} for inference')
+            logger.info(
+                f'Loaded the best model at epoch {early_stopper.best_epoch} for inference')
             break
         else:
             torch.save(lr_model.state_dict(), ckpt_path(epoch))
@@ -190,7 +218,10 @@ def main(args, logger):
     _, _, val_auc = eval_nodeclass(embeds, lr_model, val_eids, val_data)
     acc, f1, auc = eval_nodeclass(embeds, lr_model, test_eids, test_data)
     params = {"best_epoch": early_stopper.best_epoch,
-              "bidirected": args.bidirected}
+              "bidirected": args.bidirected,
+              "batch_size": args.batch_size,
+              "sampling": args.sampling,
+              "neg_ratio": args.neg_ratio}
     write_result(val_auc, (acc, f1, auc), args.dataset,
                  params, postfix="NC-GTC")
 
@@ -243,7 +274,10 @@ def parse_args():
                         help="learning rate")
     parser.add_argument("--epochs", type=int, default=50,
                         help="number of training epochs")
-    parser.add_argument("--batch-size", type=int, default=30)
+    parser.add_argument("-bs", "--batch-size", type=int, default=30)
+    parser.add_argument("--sampling", default="normal",
+                        choices=["normal", "resample", "balance"])
+    parser.add_argument("--neg-ratio", type=int, default=1)
     parser.add_argument("--gcn-lr", type=float, default=0.01)
     parser.add_argument("--display", dest="display", action="store_true")
     parser.add_argument("--no-display", dest="display", action="store_false"
@@ -253,6 +287,10 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    def warn(*args, **kwargs):
+        pass
+    import warnings
+    warnings.warn = warn
     parser = parse_args()
     args = parser.parse_args()
     logger = set_logger()
