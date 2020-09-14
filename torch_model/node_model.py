@@ -18,7 +18,7 @@ from tqdm import trange
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.utils import resample
 
-from data_loader.data_util import load_data, load_split_edges, load_label_edges
+from data_loader.data_util import load_data
 from model.utils import get_free_gpu, timeit, EarlyStopMonitor
 from torch_model.util_dgl import set_logger, construct_dglgraph
 from torch_model.layers import TemporalNodeLayer, TSAGEConv
@@ -30,6 +30,7 @@ import upper_bound_cpp
 # Change the order so that it is the one used by "nvidia-smi" and not the
 # one used by all other programs ("FASTEST_FIRST")
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
 
 class LR(torch.nn.Module):
     def __init__(self, dim, drop=0.1):
@@ -49,26 +50,20 @@ class LR(torch.nn.Module):
 
 
 def prepare_node_dataset(dataset):
-    edges, nodes = load_split_edges(dataset=dataset)
-    train_labels, val_labels, test_labels = edges[0]
-    edges = pd.concat(edges[0]).reset_index(drop=True)
-    nodes = nodes[0]
-    id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
+    edges, nodes = load_data(dataset=dataset, mode="format")[0]
 
-    def _f(edges):
-        edges["from_node_id"] = edges["from_node_id"].map(id2idx)
-        edges["to_node_id"] = edges["to_node_id"].map(id2idx)
-        return edges
-    edges, train_labels, val_labels, test_labels = [
-        _f(e) for e in [edges, train_labels, val_labels, test_labels]]
+    id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
+    edges["from_node_id"] = edges["from_node_id"].map(id2idx)
+    edges["to_node_id"] = edges["to_node_id"].map(id2idx)
 
     tmax, tmin = edges["timestamp"].max(), edges["timestamp"].min()
-    def scaler(s): return (s - tmin) / (tmax - tmin)
-    edges["timestamp"] = scaler(edges["timestamp"])
-    train_labels["timestamp"] = scaler(train_labels["timestamp"])
-    val_labels["timestamp"] = scaler(val_labels["timestamp"])
-    test_labels["timestamp"] = scaler(test_labels["timestamp"])
-    return nodes, edges, train_labels, val_labels, test_labels
+    edges["timestamp"] = (edges["timestamp"] - tmin) / (tmax - tmin + 1e-7)
+    val_time, test_time = list(np.quantile(edges["timestamp"], [0.70, 0.85]))
+    train_data = edges[edges["timestamp"] <= val_time]
+    valid_data = edges[(edges["timestamp"] > val_time) &
+                       (edges["timestamp"] <= test_time)]
+    test_data = edges[edges["timestamp"] > test_time]
+    return nodes, edges, train_data, valid_data, test_data
 
 
 def eval_nodeclass(embeds, lr_model, eids, val_data, batch_size=None):
@@ -103,6 +98,8 @@ def main(args, logger):
     # Load nodes, edges, and labeled dataset for training, validation and test.
     nodes, edges, train_data, val_data, test_data = prepare_node_dataset(
         args.dataset)
+    logger.info("Train, valid, test: %d, %d, %d", (train_data["state_label"] == 1).sum(), 
+        (val_data["state_label"] == 1).sum(), (test_data["state_label"] == 1).sum())
     delta = edges["timestamp"].shift(-1) - edges["timestamp"]
     # Pandas loc[low:high] includes high, so we use slice operations here instead.
     assert np.all(delta[:len(delta) - 1] >= 0)
@@ -118,7 +115,7 @@ def main(args, logger):
     # Set model configuration.
     # Input features: node_featurs + edge_features + time_encoding
     in_feats = (g.ndata["nfeat"].shape[-1] + g.edata["efeat"].shape[-1])
-    tgcl = TemporalLinkTrainer(g, in_feats, args.n_hidden, args.n_hidden, args) 
+    tgcl = TemporalLinkTrainer(g, in_feats, args.n_hidden, args.n_hidden, args)
     tgcl = tgcl.to(device)
 
     logger.info("loading saved TGCL model")
@@ -146,7 +143,7 @@ def main(args, logger):
     start = time.time()
     with torch.no_grad():
         g.ndata["deg"] = (g.in_degrees() +
-                          g.out_degrees()).to(g.ndata["nfeat"]) 
+                          g.out_degrees()).to(g.ndata["nfeat"])
         src_feat, dst_feat = tgcl.conv(g)
         embeds = torch.cat((src_feat, dst_feat), dim=1)
     logger.info("Convolution takes %.2f secs.", time.time() - start)
@@ -158,7 +155,8 @@ def main(args, logger):
             tgcl.eval()
             lr_model.train()
 
-            batch_ids = resample(train_ids, n_samples=batch_size, stratify=train_data["state_label"])
+            batch_ids = resample(
+                train_ids, n_samples=batch_size, stratify=train_data["state_label"])
             # batch_ids = train_ids[idx * batch_size: (idx + 1) * batch_size]
             node_ids = train_data.loc[batch_ids, "from_node_id"].to_numpy()
             ts = train_data.loc[batch_ids, "timestamp"].to_numpy()
@@ -177,6 +175,17 @@ def main(args, logger):
         epoch_bar.update()
         epoch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
 
+        def ckpt_path(epoch): return f'./nc-ckpt/{args.lr}-{args.batch_size}-{epoch}.pth'
+        if early_stopper.early_stop_check(auc):
+            logger.info('No improvment over {} epochs, stop training'.format(early_stopper.max_round))
+            logger.info(f'Loading the best model at epoch {early_stopper.best_epoch}')
+            best_model_path = ckpt_path(early_stopper.best_epoch)
+            lr_model.load_state_dict(torch.load(best_model_path))
+            logger.info(f'Loaded the best model at epoch {early_stopper.best_epoch} for inference')
+            break
+        else:
+            torch.save(lr_model.state_dict(), ckpt_path(epoch))
+
     lr_model.eval()
     _, _, val_auc = eval_nodeclass(embeds, lr_model, val_eids, val_data)
     acc, f1, auc = eval_nodeclass(embeds, lr_model, test_eids, test_data)
@@ -185,9 +194,10 @@ def main(args, logger):
     write_result(val_auc, (acc, f1, auc), args.dataset,
                  params, postfix="NC-GTC")
 
+
 def edge_args(parser):
     parser.add_argument("--norm", action="store_true")
-    parser.add_argument("--trainable", 
+    parser.add_argument("--trainable",
                         dest="trainable", action="store_true")
     parser.add_argument("--time-encoding", "-te", type=str, default="cosine",
                         help="Time encoding function.", choices=["concat", "cosine", "outer"])
@@ -211,6 +221,7 @@ def edge_args(parser):
     parser.add_argument("--agg-type", type=str, default="gcn",
                         help="Aggregator type: mean/gcn/pool")
     return parser
+
 
 def parse_args():
     # trainable, n_layers, dropout, agg_type, time_encoding, n_neg, n_hist, pos_contra, neg_contra, remain_history, lam, norm
