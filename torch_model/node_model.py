@@ -234,7 +234,7 @@ def main(args, logger):
               "sampling": args.sampling, "pos_weight": args.pos_weight,
               "neg_ratio": args.neg_ratio}
     write_result(val_auc, (acc, f1, auc), args.dataset,
-                 params, postfix="NC-GTC")
+                 params, postfix="NC-GTC", results="nc-results")
 
 
 def edge_args(parser):

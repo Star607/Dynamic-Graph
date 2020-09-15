@@ -293,8 +293,8 @@ def eval_linkpred(model, g, df, batch_size=None):
     return acc, f1, auc
 
 
-def write_result(val_auc, metrics, dataset, params, postfix="GTC"):
-    res_path = "results/{}-{}.csv".format(dataset, postfix)
+def write_result(val_auc, metrics, dataset, params, postfix="GTC", results="results"):
+    res_path = "{}/{}-{}.csv".format(results, dataset, postfix)
     headers = ["method", "dataset", "valid_auc",
                "accuracy", "f1", "auc", "params"]
     acc, f1, auc = metrics
