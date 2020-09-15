@@ -140,6 +140,7 @@ class TemporalLinkTrainer(nn.Module):
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.n_neg = args.n_neg
         self.n_hist = args.n_hist
+        self.no_ce = args.no_ce
         self.margin = nn.MarginRankingLoss(args.margin)
         self.pos_contra = args.pos_contra
         self.neg_contra = args.neg_contra
@@ -172,8 +173,11 @@ class TemporalLinkTrainer(nn.Module):
         pos_logits = self.pred(g, src_eids, dst_eids, t).squeeze()
         neg_logits = self.pred(g, src_eids.repeat(
             self.n_neg), neg_eids, t.repeat(self.n_neg)).squeeze()
-        loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
-        loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
+        if self.no_ce:
+            loss = 0.0
+        else:
+            loss = self.loss_fn(pos_logits, torch.ones_like(pos_logits))
+            loss += self.loss_fn(neg_logits, torch.zeros_like(neg_logits))
         loss += self.lam * \
             self.contrastive(g, t, src_eids, pos_logits, neg_logits)
         # loss = self.contrastive(g, t, src_eids, pos_logits, neg_logits)
@@ -290,7 +294,7 @@ def eval_linkpred(model, g, df, batch_size=None):
 
 
 def write_result(val_auc, metrics, dataset, params, postfix="GTC"):
-    res_path = "nc-results/{}-{}.csv".format(dataset, postfix)
+    res_path = "results/{}-{}.csv".format(dataset, postfix)
     headers = ["method", "dataset", "valid_auc",
                "accuracy", "f1", "auc", "params"]
     acc, f1, auc = metrics
@@ -419,8 +423,8 @@ def main(args, logger):
     acc, f1, auc = eval_linkpred(model, g, test_labels)
     params = {"best_epoch": early_stopper.best_epoch,
               "bidirected": args.bidirected, "trainable": args.trainable,
-              "opt": args.opt, "lr": args.lr,
-              "agg_type": args.agg_type,
+              "opt": args.opt, "lr": "%.4f"%(args.lr),
+              "agg_type": args.agg_type, "no-ce": args.no_ce,
               "norm": norm, "pos_contra": args.pos_contra,
               "neg_contra": args.neg_contra, 
               "n_hist": args.n_hist,
@@ -474,6 +478,7 @@ def parse_args():
                         help="number of hidden gcn layers")
     parser.add_argument("--n-neg", type=int, default=1,
                         help="number of negative samples")
+    parser.add_argument("--no-ce", action="store_true")
     parser.add_argument("--pos-contra", "-pc", action="store_true")
     parser.add_argument("--neg-contra", '-nc', action="store_true")
     parser.add_argument("--lam", type=float, default=1.0,

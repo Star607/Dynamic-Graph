@@ -42,7 +42,10 @@ def evaluate():
         default = " --dataset {} --bidirected --gpu --gid {} --display --lr 1e-2 --lam 0.0  "
     else:
         default = " --dataset {} --bidirected --gpu --gid {} --no-display --lr 1e-2 --lam 0.0 "
-    cmds.append(default + " --agg-type mean")
+    # cmds.append(default + " -pc -nc --no-ce --margin 0.1")
+    # cmds.append(default + " -pc -nc --no-ce --margin 0.2")
+    # cmds.append(default + " -pc -nc --no-ce --margin 0.4")
+    # cmds.append(default + " --agg-type mean")
     cmds.append(default + " --agg-type pool")
     # cmds.append(default + "-te concat")
     # cmds.append(default + " -pc -nc --margin 0.1")
