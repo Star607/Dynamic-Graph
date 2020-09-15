@@ -315,7 +315,8 @@ def write_result(val_auc, metrics, dataset, params, postfix="GTC"):
 
 
 def main(args, logger):
-
+    set_random_seed()
+    logger.info("Set random seeds.")
     logger.info(args)
 
     # Set device utility.
@@ -505,6 +506,4 @@ if __name__ == "__main__":
     parser = parse_args()
     args = parser.parse_args()
     logger = set_logger()
-    set_random_seed()
-    logger.info("Set random seeds.")
     main(args, logger)

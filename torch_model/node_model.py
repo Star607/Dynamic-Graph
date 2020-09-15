@@ -23,7 +23,7 @@ from model.utils import get_free_gpu, timeit, EarlyStopMonitor
 from torch_model.util_dgl import set_logger, construct_dglgraph
 from torch_model.layers import TemporalNodeLayer, TSAGEConv
 from torch_model.eid_precomputation import _prepare_deg_indices, _par_deg_indices, _deg_indices_full, _par_deg_indices_full, _latest_edge, LatestNodeInteractionFinder
-from .models import TemporalLinkTrainer
+from .models import TemporalLinkTrainer, set_random_seed
 # A cpp extension computing upper_bound along the last dimension of an non-decreasing matrix. It saves huge memory use.
 import upper_bound_cpp
 
@@ -103,6 +103,8 @@ def eval_nodeclass(embeds, lr_model, eids, val_data, batch_size=None):
 
 
 def main(args, logger):
+    set_random_seed()
+    logger.info("Set random seeds.")
     logger.info(args)
 
     # Set device utility.
@@ -247,6 +249,7 @@ def edge_args(parser):
                         help="number of hidden gcn layers")
     parser.add_argument("--n-neg", type=int, default=1,
                         help="number of negative samples")
+    parser.add_argument("--no-ce", action="store_true")
     parser.add_argument("--pos-contra", "-pc", action="store_true")
     parser.add_argument("--neg-contra", '-nc', action="store_true")
     parser.add_argument("--lam", type=float, default=0.0,

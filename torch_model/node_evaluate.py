@@ -2,6 +2,7 @@ import argparse
 import dgl
 import numpy as np
 import torch
+from itertools import product
 
 from data_loader.data_util import _iterate_datasets
 from torch_model.node_model import main, parse_args
@@ -41,16 +42,21 @@ def evaluate():
 
     if data == "JODIE-wikipedia":
         bss = [256, 128, 64]
+        cmds.append(default.format(data, 3e-4, 128, "balance", ""))
     else:
         bss = [1024, 512, 256]
-    for lr, bs in zip([1e-4, 3e-4, 1e-3], bss):
+        cmds.append(default.format(data, 1e-4, 1024, "balance", ""))
+        cmds.append(default.format(data, 1e-4, 1024, "balance", " --neg-ratio 10"))
+        cmds.append(default.format(data, 1e-4, 512, "balance", ""))
+        cmds.append(default.format(data, 1e-4, 512, "balance", " --neg-ratio 10"))
+    # for lr, bs in product([1e-4, 3e-4, 1e-3], bss):
         # cmds.append(default.format(data, lr, bs, "normal", ""))
         # cmds.append(default.format(data, lr, bs, "resample", ""))
         # cmds.append(default.format(data, lr, bs, "resample", "-pw"))
-        cmds.append(default.format(data, lr, bs, "balance", ""))
-        cmds.append(default.format(data, lr, bs, "balance", "--neg-ratio 10"))
-        cmds.append(default.format(data, lr, bs, "balance", "--neg-ratio 20"))
-        cmds.append(default.format(data, lr, bs, "balance", "--neg-ratio 40"))
+        # cmds.append(default.format(data, lr, bs, "balance", ""))
+        # cmds.append(default.format(data, lr, bs, "balance", "--neg-ratio 10"))
+        # cmds.append(default.format(data, lr, bs, "balance", "--neg-ratio 20"))
+        # cmds.append(default.format(data, lr, bs, "balance", "--neg-ratio 40"))
 
     for cmd in cmds:
         cmd = cmd + f" --gpu --gid {args.gid}"
