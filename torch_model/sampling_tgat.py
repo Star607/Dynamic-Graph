@@ -40,8 +40,11 @@ class SamplingFusion(TGAN):
     def set_samplers(self, samplers: list) -> None:
         self.samplers = samplers
 
-    def tem_conv(self, src_idx_l, cut_time_l, curr_layers,
-                 num_neighbors) -> torch.Tensor:
+    def tem_conv(self,
+                 src_idx_l,
+                 cut_time_l,
+                 curr_layers,
+                 num_neighbors=20) -> torch.Tensor:
         assert (curr_layers >= 0)
         device = self.n_feat_th.device
         batch_size = len(src_idx_l)
@@ -113,8 +116,12 @@ class LGFusion(SamplingFusion):
                                                 feat_dim,
                                                 dropout=drop_out)
 
-    def forward(self, src_idx_l, target_idx_l, cut_time_l, num_neighbors,
-                global_anchors):
+    def forward(self,
+                src_idx_l,
+                target_idx_l,
+                cut_time_l,
+                num_neighbors=20,
+                global_anchors=None):
         src_embed = self.lg_conv(src_idx_l, cut_time_l, self.num_layers,
                                  num_neighbors, global_anchors)
         target_embed = self.lg_conv(target_idx_l, cut_time_l, self.num_layers,
@@ -122,8 +129,13 @@ class LGFusion(SamplingFusion):
         score = self.affinity_score(src_embed, target_embed).squeeze(dim=-1)
         return score
 
-    def contrast(self, src_idx_l, target_idx_l, background_idx_l, cut_time_l,
-                 num_neighbors, global_anchors):
+    def contrast(self,
+                 src_idx_l,
+                 target_idx_l,
+                 background_idx_l,
+                 cut_time_l,
+                 num_neighbors=20,
+                 global_anchors=None):
         src_embed = self.lg_conv(src_idx_l, cut_time_l, self.num_layers,
                                  num_neighbors, global_anchors)
         target_embed = self.lg_conv(target_idx_l, cut_time_l, self.num_layers,
@@ -137,8 +149,12 @@ class LGFusion(SamplingFusion):
                                         background_embed).squeeze(dim=-1)
         return pos_score.sigmoid(), neg_score.sigmoid()
 
-    def lg_conv(self, src_idx_l, cut_time_l, curr_layers, num_neighbors,
-                global_anchors) -> torch.Tensor:
+    def lg_conv(self,
+                src_idx_l,
+                cut_time_l,
+                curr_layers,
+                num_neighbors=20,
+                global_anchors=None) -> torch.Tensor:
         batch_size = len(src_idx_l)
         num_anchors = len(global_anchors) // len(src_idx_l)
         src_embeds = self.tem_conv(src_idx_l, cut_time_l, curr_layers,
