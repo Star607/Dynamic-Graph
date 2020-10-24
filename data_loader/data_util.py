@@ -77,3 +77,37 @@ def load_label_edges(dataset="ia-contact", root_dir="/nfs/zty/Graph"):
     test_edges = [edges for edges, _ in load_data(
         dataset=dataset, mode="label_test", root_dir=root_dir)]
     return list(zip(train_edges, valid_edges, test_edges)), nodes
+
+def load_graph(dataset=None):
+    """Concat the temporal edges, transform into nstep time slots, and return edges, pivot_time.
+    """
+    edges, nodes = load_split_edges(dataset=dataset)
+    train_edges, val_edges, test_edges = edges[0]
+    val_time = val_edges["timestamp"].min()
+    test_time = test_edges["timestamp"].min()
+
+    edges = pd.concat([train_edges, val_edges, test_edges])
+    nodes = nodes[0]
+    # padding node is 0, so add 1 here.
+    id2idx = {row.node_id: row.id_map + 1 for row in nodes.itertuples()}
+    edges["from_node_id"] = edges["from_node_id"].map(id2idx)
+    edges["to_node_id"] = edges["to_node_id"].map(id2idx)
+    return edges, len(nodes), val_time, test_time
+
+
+def load_label_data(dataset=None):
+    edges, nodes = load_label_edges(dataset=dataset)
+    train_edges, val_edges, test_edges = edges[0]
+    pivot_time = train_edges["timestamp"].max()
+
+    nodes = nodes[0]
+    # padding node is 0, so add 1 here.
+    id2idx = {row.node_id: row.id_map + 1 for row in nodes.itertuples()}
+    ans = []
+    for df in [train_edges, val_edges, test_edges]:
+        df["from_node_id"] = df["from_node_id"].map(id2idx)
+        df["to_node_id"] = df["to_node_id"].map(id2idx)
+        df = df[["from_node_id", "to_node_id", "timestamp", "label"]]
+        df.columns = ["u", "i", "ts", "label"]
+        ans.append(df)
+    return ans[0], ans[1], ans[2]
