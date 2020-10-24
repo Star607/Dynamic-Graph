@@ -19,11 +19,12 @@ class SoftmaxAttention(nn.Module):
 
     def forward(self, embeds: list) -> torch.Tensor:
         k = len(embeds)
-        x = [F.tanh(self.linears[i](embeds[i])) for i in range(k)]
+        x = [torch.tanh(self.linears[i](embeds[i])) for i in range(k)]
         x = [self.query(x[i]) for i in range(k)]  # (k, n, 1)
-        weights = torch.cat(x, dim=1)  # (n, k)
+        weights = torch.softmax(torch.cat(x, dim=1), dim=1)  # (n, k)
+        embeds = torch.cat([i.unsqueeze(dim=1) for i in embeds], dim=1) # (n, k, d)
         ans = weights.unsqueeze(-1) * embeds
-        return torch.sum(ans, dim=-1)  # (n, d)
+        return torch.sum(ans, dim=1)  # (n, d)
 
 
 class SamplingFusion(TGAN):
@@ -50,6 +51,7 @@ class SamplingFusion(TGAN):
         batch_size = len(src_idx_l)
         src_nodes_th = torch.from_numpy(src_idx_l).long().to(device)
         cut_times_th = torch.from_numpy(cut_time_l).float().to(device)
+        cut_times_th = cut_times_th.unsqueeze(dim=1)
         src_tembed = self.time_encoder(torch.zeros_like(cut_times_th))
         src_nfeat = self.node_raw_embed(src_nodes_th)
 
@@ -78,10 +80,11 @@ class SamplingFusion(TGAN):
             src_ngh_tdelta = cut_time_l[:, np.newaxis] - src_ngh_t
             src_ngh_t_th = torch.from_numpy(src_ngh_tdelta).float().to(device)
 
+            # next layer also perform sampling fusion
             src_ngh_conv_feat = self.tem_conv(src_ngh_nodes.flatten(),
                                               src_ngh_t.flatten(),
                                               curr_layers - 1, num_neighbors)
-            src_ngh_feat = src_ngh_conv_feat.view(batch_size, num_neighbors,
+            src_ngh_feat = src_ngh_conv_feat.view(batch_size, cur_neighbors,
                                                   -1)
 
             # get edge time features and node features
