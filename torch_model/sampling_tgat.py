@@ -113,6 +113,30 @@ class LGFusion(SamplingFusion):
                                                 feat_dim,
                                                 dropout=drop_out)
 
+    def forward(self, src_idx_l, target_idx_l, cut_time_l, num_neighbors,
+                global_anchors):
+        src_embed = self.lg_conv(src_idx_l, cut_time_l, self.num_layers,
+                                 num_neighbors, global_anchors)
+        target_embed = self.lg_conv(target_idx_l, cut_time_l, self.num_layers,
+                                    num_neighbors, global_anchors)
+        score = self.affinity_score(src_embed, target_embed).squeeze(dim=-1)
+        return score
+
+    def contrast(self, src_idx_l, target_idx_l, background_idx_l, cut_time_l,
+                 num_neighbors, global_anchors):
+        src_embed = self.lg_conv(src_idx_l, cut_time_l, self.num_layers,
+                                 num_neighbors, global_anchors)
+        target_embed = self.lg_conv(target_idx_l, cut_time_l, self.num_layers,
+                                    num_neighbors, global_anchors)
+        background_embed = self.lg_conv(background_idx_l, cut_time_l,
+                                        self.num_layers, num_neighbors,
+                                        global_anchors)
+        pos_score = self.affinity_score(src_embed,
+                                        target_embed).squeeze(dim=-1)
+        neg_score = self.affinity_score(src_embed,
+                                        background_embed).squeeze(dim=-1)
+        return pos_score.sigmoid(), neg_score.sigmoid()
+
     def lg_conv(self, src_idx_l, cut_time_l, curr_layers, num_neighbors,
                 global_anchors) -> torch.Tensor:
         batch_size = len(src_idx_l)
@@ -125,11 +149,10 @@ class LGFusion(SamplingFusion):
 
         mask = torch.zeros((batch_size, 1, num_anchors))
         output, attn = self.global_fusion(q=src_embeds,
-                                               k=global_embeds,
-                                               v=global_embeds,
-                                               mask=mask)
+                                          k=global_embeds,
+                                          v=global_embeds,
+                                          mask=mask)
         output = output.squeeze(1)
         attn = attn.squeeze(1)
         output = self.merge_layer(output, src_embeds)
         return output
-
