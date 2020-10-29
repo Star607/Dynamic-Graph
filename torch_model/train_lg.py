@@ -94,6 +94,7 @@ def config_parser():
     parser.add_argument('--uniform',
                         action='store_true',
                         help='take uniform sampling from temporal neighbors')
+    parser.add_argument('--inverse', default='distribution')
     return parser
 
 
@@ -125,6 +126,9 @@ if True:
 
 
 def set_logger():
+    numba_logger = logging.getLogger('numba')
+    numba_logger.setLevel(logging.WARNING)
+    
     # set up logger
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger()
@@ -184,7 +188,7 @@ if True:
     g_df["idx"] = np.arange(1, len(g_df) + 1)
     g_df.columns = ["u", "i", "ts", "idx"]
     bound = np.sqrt(6 / (2 * NODE_DIM))
-    if args.data.startswith('JODIE') or args.freeze:
+    if args.freeze:
         e_feat = edges.iloc[:, 4:].to_numpy()
         NODE_DIM = e_feat.shape[1]
         n_feat = np.zeros((n_nodes + 1, NODE_DIM))
@@ -314,7 +318,6 @@ for epoch in epoch_bar:
         model = model.train()
         pos_prob, neg_prob = model.contrast(src_l_cut, dst_l_cut, dst_l_fake,
                                            ts_l_cut, NUM_NEIGHBORS)
-
         loss = criterion(pos_prob, pos_label)
         loss += criterion(neg_prob, neg_label)
 
@@ -371,15 +374,16 @@ logger.info('Saving model')
 torch.save(model.state_dict(), MODEL_SAVE_PATH)
 logger.info('Models saved')
 
-res_path = "result/{}-fusion.csv".format(DATA)
+res_path = "results/{}-fusion.csv".format(DATA)
 headers = ["method", "dataset", "valid_auc", "accuracy", "f1", "auc", "params"]
 if not os.path.exists(res_path):
     f = open(res_path, 'w+')
     f.write(",".join(headers) + "\r\n")
     f.close()
     os.chmod(res_path, 0o777)
+config = f"n_layer=2,n_head=2,time=True,freeze={args.freeze}"
 with open(res_path, "a") as file:
     file.write(
-        "{},{},{:.4f},{:.4f},{:.4f},{:.4f},\"n_layer=2,n_head=2,time=True\"".
-        format(args.model, DATA, val_auc, test_acc, test_f1, test_auc))
+        "{},{},{:.4f},{:.4f},{:.4f},{:.4f},\" {}\"".
+        format(args.model, DATA, val_auc, test_acc, test_f1, test_auc, config))
     file.write("\n")
