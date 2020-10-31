@@ -20,7 +20,7 @@ from sklearn.metrics import roc_auc_score
 
 from data_loader.data_util import load_graph, load_label_data
 from torch_model.sampling_tgat import TGAN, SamplingFusion, LGFusion
-from tgat.graph import NeighborFinder
+from tgat.sampling import NeighborFinder
 from model.utils import EarlyStopMonitor, RandEdgeSampler, get_free_gpu
 
 

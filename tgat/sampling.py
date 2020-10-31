@@ -55,19 +55,12 @@ def get_temporal_neighbor_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l,
     out_ngh_eidx_batch = np.zeros(
         (len(src_idx_l), num_neighbors)).astype(np.int32)
 
-    idx = np.arange(len(src_idx_l))
-
     for i, (src_idx, cut_time) in enumerate(zip(src_idx_l, cut_time_l)):
-    # for i in prange(len(src_idx_l)):
-        # src_idx = src_idx_l[i]
-        # cut_time = cut_time_l[i]
-
         # use np.searchsorted
         neighbors_idx = node_idx_l[off_set_l[src_idx]:off_set_l[src_idx + 1]]
         neighbors_ts = node_ts_l[off_set_l[src_idx]:off_set_l[src_idx + 1]]
         neighbors_e_idx = edge_idx_l[off_set_l[src_idx]:off_set_l[src_idx + 1]]
-        left = np.searchsorted(neighbors_ts, cut_time, side="left") - 1
-        left = max(left, 0)
+        left = np.searchsorted(neighbors_ts, cut_time, side="left")
         ngh_idx, ngh_eidx, ngh_ts = neighbors_idx[:left], \
                 neighbors_e_idx[:left], neighbors_ts[:left]
 
@@ -75,32 +68,49 @@ def get_temporal_neighbor_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l,
         #                                            node_idx_l, node_ts_l,
         #                                            edge_idx_l, off_set_l)
 
-        if len(ngh_idx) > 0:
-            if uniform:
-                sampled_idx = np.random.randint(0, len(ngh_idx), num_neighbors)
+        if len(ngh_idx) <= 0:
+            continue
+        # if uniform:
+        #     sampled_idx = np.random.randint(0, len(ngh_idx), num_neighbors)
+        #     # sampled_idx = np.sort(sampled_idx)
 
-                out_ngh_node_batch[i, :] = ngh_idx[sampled_idx]
-                out_ngh_t_batch[i, :] = ngh_ts[sampled_idx]
-                out_ngh_eidx_batch[i, :] = ngh_eidx[sampled_idx]
+        #     # out_ngh_node_batch[i, :] = ngh_idx[sampled_idx]
+        #     # out_ngh_t_batch[i, :] = ngh_ts[sampled_idx]
+        #     # out_ngh_eidx_batch[i, :] = ngh_eidx[sampled_idx]
+           
+        # else:
+        #     prob = ngh_ts - cut_time
+        #     prob = np.exp(prob - np.max(prob)) # avoid single zero, or overflow
+        #     # assert np.all(prob <= 0)
+        #     # prob = np.exp(prob)
+        #     prob = prob / prob.sum()
+        #     sampled_idx = np.random.choice(len(ngh_idx), size=num_neighbors, p=prob)
 
-                # resort based on time
-                pos = out_ngh_t_batch[i, :].argsort()
-                out_ngh_node_batch[i, :] = out_ngh_node_batch[i, :][pos]
-                out_ngh_t_batch[i, :] = out_ngh_t_batch[i, :][pos]
-                out_ngh_eidx_batch[i, :] = out_ngh_eidx_batch[i, :][pos]
-            else:
-                ngh_ts = ngh_ts[:num_neighbors]
-                ngh_idx = ngh_idx[:num_neighbors]
-                ngh_eidx = ngh_eidx[:num_neighbors]
+        # sampled_idx = np.sort(sampled_idx)
+        # out_ngh_node_batch[i, :] = ngh_idx[sampled_idx]
+        # out_ngh_t_batch[i, :] = ngh_ts[sampled_idx]
+        # out_ngh_eidx_batch[i, :] = ngh_eidx[sampled_idx]
 
-                # assert (len(ngh_idx) <= num_neighbors)
-                # assert (len(ngh_ts) <= num_neighbors)
-                # assert (len(ngh_eidx) <= num_neighbors)
+        if uniform:
+            sampled_idx = np.random.randint(0, len(ngh_idx), num_neighbors)
+            sampled_idx = np.sort(sampled_idx)
 
-                out_ngh_node_batch[i, num_neighbors - len(ngh_idx):] = ngh_idx
-                out_ngh_t_batch[i, num_neighbors - len(ngh_ts):] = ngh_ts
-                out_ngh_eidx_batch[i,
-                                   num_neighbors - len(ngh_eidx):] = ngh_eidx
+            out_ngh_node_batch[i, :] = ngh_idx[sampled_idx]
+            out_ngh_t_batch[i, :] = ngh_ts[sampled_idx]
+            out_ngh_eidx_batch[i, :] = ngh_eidx[sampled_idx]
+        else:
+            ngh_ts = ngh_ts[-num_neighbors:]
+            ngh_idx = ngh_idx[-num_neighbors:]
+            ngh_eidx = ngh_eidx[-num_neighbors:]
+
+            assert (len(ngh_idx) <= num_neighbors)
+            assert (len(ngh_ts) <= num_neighbors)
+            assert (len(ngh_eidx) <= num_neighbors)
+
+            out_ngh_node_batch[i, num_neighbors - len(ngh_idx):] = ngh_idx
+            out_ngh_t_batch[i, num_neighbors - len(ngh_ts):] = ngh_ts
+            out_ngh_eidx_batch[i,
+                                num_neighbors - len(ngh_eidx):] = ngh_eidx
 
     return out_ngh_node_batch, out_ngh_eidx_batch, out_ngh_t_batch
 
