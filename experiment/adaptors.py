@@ -129,7 +129,7 @@ def run_htne(dataset="all", project_dir="/nfs/zty/Graph/4-htne/", n_jobs=4, **kw
             df = df[["from_node_id", "to_node_id", "timestamp"]]
             df.to_csv(input_path, index=None, header=None, sep=" ")
         output_path = os.path.join(project_dir, "emb/{}.emb".format(name))
-        for hist_len in [3, 4, 5]:
+        for hist_len in [20]:
             hist_path = output_path + str(hist_len)
             commands.append(command.format(project_dir=project_dir,
                                            input_path=input_path, output_path=hist_path, hist_len=hist_len))

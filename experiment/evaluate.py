@@ -223,7 +223,7 @@ def evaluate_htne(project_dir="/nfs/zty/Graph/4-htne/emb"):
         edgel, nodel = load_label_edges(dataset=name)
         train_edges, valid_edges, test_edges = id_map(edgel[0], nodel[0])
 
-        for hist_len in [3, 4, 5]:
+        for hist_len in [20]:
             fpath = "{}/{}.emb{}".format(project_dir, name, hist_len)
             id2idx, embeds = load_embeddings(fpath, skiprows=1, sep=" ")
             X_train = edge2tabular(train_edges, id2idx, embeds)
@@ -295,7 +295,7 @@ def evaluate_gta():
 def evaluate_tgat(project_dir="/nfs/zty/Graph/TGAT-bk"):
     fname = iterate_datasets(dataset=args.dataset)
     fname = fname[args.start: args.end]
-    command = "python {}/exper_edge.py -d {} --gpu {}"
+    command = "python {}/exper_edge.py -d {} --gpu {} --uniform"
     commands = []
     for name in fname:
         commands.append(command.format(project_dir, name, args.gid))
