@@ -1,5 +1,11 @@
+from multiprocessing import Process, Queue
+import queue
+from sys import maxsize
+import threading
 import numpy as np
+from numpy.core.shape_base import block
 import torch
+from torch.utils.data import Dataset, DataLoader
 from numba import jit, prange
 import bisect
 
@@ -109,8 +115,7 @@ def get_temporal_neighbor_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l,
 
             out_ngh_node_batch[i, num_neighbors - len(ngh_idx):] = ngh_idx
             out_ngh_t_batch[i, num_neighbors - len(ngh_ts):] = ngh_ts
-            out_ngh_eidx_batch[i,
-                                num_neighbors - len(ngh_eidx):] = ngh_eidx
+            out_ngh_eidx_batch[i, num_neighbors - len(ngh_eidx):] = ngh_eidx
 
     return out_ngh_node_batch, out_ngh_eidx_batch, out_ngh_t_batch
 
@@ -197,12 +202,12 @@ class NeighborFinder:
     def find_k_hop(self, k, src_idx_l, cut_time_l, num_neighbors=20):
         """Sampling the k-hop sub graph
         """
-        x, y, z = self.get_temporal_neighbor(src_idx_l, cut_time_l,
-                                             num_neighbors)
-        node_records = [x]
-        eidx_records = [y]
-        t_records = [z]
-        for _ in range(k - 1):
+        # x, y, z = self.get_temporal_neighbor(src_idx_l, cut_time_l,
+        #                                      num_neighbors)
+        node_records = [src_idx_l]
+        eidx_records = [np.ones_like(src_idx_l)]
+        t_records = [cut_time_l]
+        for _ in range(k):
             ngn_node_est, ngh_t_est = node_records[-1], t_records[
                 -1]  # [N, *([num_neighbors] * (k - 1))]
             orig_shape = ngn_node_est.shape
@@ -221,3 +226,127 @@ class NeighborFinder:
             eidx_records.append(out_ngh_eidx_batch)
             t_records.append(out_ngh_t_batch)
         return node_records, eidx_records, t_records
+
+
+class BiSamplingNFinder(NeighborFinder):
+    def __init__(self, adj_list, samplers) -> None:
+        super(BiSamplingNFinder, self).__init__(adj_list, uniform=False)
+        # a list of sampling methods, including 'uniform' and 'inverse temporal'
+        self.samplers = samplers  
+
+    def get_temporal_neighbor(self, src_idx_l, cut_time_l, num_neighbors):
+        pass
+
+class NeighborProcess(Process):
+    def __init__(self, node_generator, ts_generator, ngh_finder, k, q) -> None:
+        super(NeighborProcess, self).__init__()
+        self.node_generator = node_generator
+        self.ts_generator = ts_generator
+        self.ngh_finder = ngh_finder
+        self.k = k
+        self.q = q
+        # self.stream = torch.cuda.Stream()
+
+    def run(self):
+        # with torch.cuda.stream(self.stream):
+        for src_nodes, ts_l in zip(self.node_generator, self.ts_generator):
+            ngh_nodes, ngh_eids, ngh_t = self.ngh_finder.find_k_hop(self.k, src_nodes, ts_l)
+            self.q.put((ngh_nodes, ngh_eids, ngh_t), block=True)
+
+class Wrapper(object):
+    def __init__(self, nodes, batch_size) -> None:
+        self.nodes = nodes
+        self.batch_size = batch_size
+        self.batch_num = 0
+    
+    def __iter__(self):
+        self.batch_num = 0
+        return self
+    
+    def __next__(self):
+        if self.batch_num * self.batch_size >= len(self.nodes):
+            raise StopIteration
+        else:
+            start = self.batch_num * self.batch_size
+            batch = self.nodes[start: start + self.batch_size]
+            self.batch_num += 1
+            return batch
+
+class NeighborStream(threading.Thread):
+    """Transform the numpy arrays to pytorch tensors on the specified device.
+    """
+    def __init__(self, queues, device, batch_num) -> None:
+        self.device_queues = [queue.Queue(maxsize=20) for _ in queues]
+        self.device = device
+        self.batch_num = batch_num
+        self.stream = torch.cuda.Stream()
+    
+    def get_queues(self):
+        return self.device_queues
+
+    def run(self):
+        with torch.cuda.stream(self.stream):
+            for _ in range(self.batch_num):
+                batch = [q.get(block=True) for q in self.ques]
+                # device_batch = []
+                for el, q in zip(batch, self.device_queues):
+                    nodes, eids, tbatch = el
+                    ngh_nodes_th = [torch.from_numpy(n.flatten()).long().to(self.device) for n in nodes]
+                    ngh_eids_th = [torch.from_numpy(e.flatten()).long().to(self.device) for e in eids]
+                    ngh_t_th = [torch.from_numpy(t.flatten()).float().to(self.device) for t in tbatch]
+                    q.put((ngh_nodes_th, ngh_eids_th, ngh_t_th), block=True)
+                    # device_batch.append((ngh_nodes_th, ngh_eids_th, ngh_t_th))
+                
+
+
+class NeighborLoader(object):
+    """Given the ngh_finder and source nodes, `NeighborLoader` provides batch-wise `k`-hop neighbors of a batch of source nodes.
+    """
+    def __init__(self, ngh_finder, num_layer, src_nodes, ts_list, device, batch_size=128, shuffle=False) -> None:
+        self.ngh_finder = ngh_finder
+        self.num_layer = num_layer
+        self.src_nodes = src_nodes # a list of source nodes, destination nodes
+        self.ts_list = ts_list
+        self.device = device
+        self.batch_size = batch_size
+        self.idx_list = np.arange(len(ts_list))
+        self.num = len(self.src_nodes[0])
+        assert np.all([len(nodes) == self.num for nodes in src_nodes])
+        self.batch_num = 0
+        self.shuffle = shuffle
+        self.ques = []
+    
+    def reset(self):
+        if self.shuffle:
+            np.random.shuffle(self.idx_list)
+            self.src_nodes = [nodes[self.idx_list] for nodes in self.src_nodes]
+            self.ts_list = self.ts_list[self.idx_list]
+        self.batch_num = 0
+
+        self.ques = [Queue(maxsize=20) for _ in range(len(self.src_nodes))]
+        for i, nodes in enumerate(self.src_nodes):
+            node_generator = Wrapper(nodes, self.batch_size)
+            ts_generator = Wrapper(self.ts_list, self.batch_size)
+            s = NeighborProcess(node_generator, ts_generator, self.ngh_finder, self.num_layer, self.ques[i])
+            s.start()
+    
+    def __len__(self):
+        r = 1 if len(self.ts_list) % self.batch_size > 0 else 0
+        return len(self.ts_list) // self.batch_size + r
+    def end(self):
+        return self.batch_num * self.batch_size >= self.num
+    
+    def next_batch(self):
+        if self.end():
+            raise StopIteration
+        # Here we wait for the queue productions.
+        batch = [q.get(block=True) for q in self.ques]
+        gpu_batch = []
+        for el in batch:
+            nodes, eids, tbatch = el
+            ngh_nodes_th = [torch.from_numpy(n.flatten()).long().to(self.device) for n in nodes]
+            ngh_eids_th = [torch.from_numpy(e.flatten()).long().to(self.device) for e in eids]
+            ngh_t_th = [torch.from_numpy(t.flatten()).float().to(self.device) for t in tbatch]
+            gpu_batch.append((ngh_nodes_th, ngh_eids_th, ngh_t_th))
+        self.batch_num += 1
+        return gpu_batch

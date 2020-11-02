@@ -22,7 +22,8 @@ class SoftmaxAttention(nn.Module):
         x = [torch.tanh(self.linears[i](embeds[i])) for i in range(k)]
         x = [self.query(x[i]) for i in range(k)]  # (k, n, 1)
         weights = torch.softmax(torch.cat(x, dim=1), dim=1)  # (n, k)
-        embeds = torch.cat([i.unsqueeze(dim=1) for i in embeds], dim=1) # (n, k, d)
+        embeds = torch.cat([i.unsqueeze(dim=1) for i in embeds],
+                           dim=1)  # (n, k, d)
         ans = weights.unsqueeze(-1) * embeds
         return torch.sum(ans, dim=1)  # (n, d)
 
@@ -36,22 +37,41 @@ class SamplingFusion(TGAN):
         self.fusion_layer_list = torch.nn.ModuleList([
             SoftmaxAttention(feat_dim, k_samplers) for _ in range(num_layers)
         ])
-        self.samplers = None
+        self.k_samplers = k_samplers
 
-    def set_samplers(self, samplers: list) -> None:
-        self.samplers = samplers
+    def forward(self, src_idx_l, target_idx_l, num_neighbors=20):
+        src_embed = self.tem_conv(src_idx_l, self.num_layers, num_neighbors)
+        target_embed = self.tem_conv(target_idx_l, self.num_layers, num_neighbors)
+        score = self.affinity_score(src_embed, target_embed).squeeze(dim=-1)
+        return score
+
+    def contrast(self, src_idx_l, target_idx_l, background_idx_l,
+                 num_neighbors):
+        src_embed = self.tem_conv(src_idx_l, self.num_layers, num_neighbors)
+        target_embed = self.tem_conv(target_idx_l, self.num_layers,
+                                     num_neighbors)
+        background_embed = self.tem_conv(background_idx_l, self.num_layers,
+                                         num_neighbors)
+        pos_score = self.affinity_score(src_embed,
+                                        target_embed).squeeze(dim=-1)
+        neg_score = self.affinity_score(src_embed,
+                                        background_embed).squeeze(dim=-1)
+        return pos_score.sigmoid(), neg_score.sigmoid()
 
     def tem_conv(self,
-                 src_idx_l,
-                 cut_time_l,
+                 src_list,
                  curr_layers,
                  num_neighbors=20) -> torch.Tensor:
+        """Here we precomputed the k-hop neighbors instead of computing during attention models.
+        """
         assert (curr_layers >= 0)
+        assert num_neighbors % self.k_samplers == 0
+        src_idx_l, src_eids_l, cut_time_l = src_list
+
         device = self.n_feat_th.device
-        batch_size = len(src_idx_l)
-        src_nodes_th = torch.from_numpy(src_idx_l).long().to(device)
-        cut_times_th = torch.from_numpy(cut_time_l).float().to(device)
-        cut_times_th = cut_times_th.unsqueeze(dim=1)
+        batch_size = len(src_idx_l[0])
+        src_nodes_th = src_idx_l[0]
+        cut_times_th = cut_time_l[0].unsqueeze(dim=1)
         src_tembed = self.time_encoder(torch.zeros_like(cut_times_th))
         src_nfeat = self.node_raw_embed(src_nodes_th)
 
@@ -59,43 +79,43 @@ class SamplingFusion(TGAN):
             return src_nfeat
 
         # get node features at previous layer
-        src_conv_feat = self.tem_conv(src_idx_l, cut_time_l, curr_layers - 1,
-                                      num_neighbors)
+        src_conv_feat = self.tem_conv(
+            (src_idx_l[:-1], src_eids_l[:-1], cut_time_l[:-1]),
+            curr_layers - 1, num_neighbors)
+        k = self.k_samplers
+        # get neighbor node features at previous layer
+        src_ngh_nodes_th = src_idx_l[1].view(batch_size, k,
+                                             -1).permute(1, 0,
+                                                         2)  # [k, batch, -1]
+        src_ngh_eids_th = src_eids_l[1].view(batch_size, k,
+                                             -1).permute(1, 0, 2)
+        src_ngh_t_th = cut_time_l[1].view(batch_size, k, -1).permute(1, 0, 2)
+        src_ngh_tdelta = cut_times_th.unsqueeze(dim=0) - src_ngh_t_th
 
-        div_neighbors = num_neighbors // len(self.samplers)
+        # next layer also perform sampling fusion
+        div_neighbors = num_neighbors // self.k_samplers
+        src_ngh_conv_feat = self.tem_conv(
+            (src_idx_l[1:], src_eids_l[1:], cut_time_l[1:]), curr_layers - 1,
+            num_neighbors)
+        src_ngh_feat = src_ngh_conv_feat.view(batch_size, k, div_neighbors,
+                                              -1).permute(1, 0, 2, 3)
+
         sampling_feats = []
-        for i in range(len(self.samplers)):
-            if i == len(self.samplers) - 1:
-                cur_neighbors = num_neighbors - i * div_neighbors
-            else:
-                cur_neighbors = div_neighbors
-
-            # get neighbor node features at previous layer
-            src_ngh_nodes, src_ngh_eids, src_ngh_t = self.samplers[
-                i].get_temporal_neighbor(src_idx_l, cut_time_l, cur_neighbors)
-
-            src_ngh_nodes_th = torch.from_numpy(src_ngh_nodes).long().to(
-                device)
-            src_ngh_eids_th = torch.from_numpy(src_ngh_eids).long().to(device)
-            src_ngh_tdelta = cut_time_l[:, np.newaxis] - src_ngh_t
-            src_ngh_t_th = torch.from_numpy(src_ngh_tdelta).float().to(device)
-
-            # next layer also perform sampling fusion
-            src_ngh_conv_feat = self.tem_conv(src_ngh_nodes.flatten(),
-                                              src_ngh_t.flatten(),
-                                              curr_layers - 1, num_neighbors)
-            src_ngh_feat = src_ngh_conv_feat.view(batch_size, cur_neighbors,
-                                                  -1)
-
+        for i in range(k):
+            i_nodes = src_ngh_nodes_th[i].squeeze(0)  # [batch, num_neighbors]
+            i_eids = src_ngh_eids_th[i].squeeze(0)
+            i_t = src_ngh_tdelta[i].squeeze(0)
+            i_ngh_feat = src_ngh_feat[i].squeeze(
+                0)  # [batch, num_neighbors, DIM]
             # get edge time features and node features
-            src_ngh_tembed = self.time_encoder(src_ngh_t_th)
-            src_ngh_efeat = self.edge_raw_embed(src_ngh_eids_th)
+            i_ngh_tembed = self.time_encoder(i_t)
+            i_ngh_efeat = self.edge_raw_embed(i_eids)
 
             # attention aggregation
-            mask = src_ngh_nodes_th == 0
+            mask = i_nodes == 0
             attn_m = self.attn_model_list[curr_layers - 1]
-            local, weight = attn_m(src_conv_feat, src_tembed, src_ngh_feat,
-                                   src_ngh_tembed, src_ngh_efeat, mask)
+            local, weight = attn_m(src_conv_feat, src_tembed, i_ngh_feat,
+                                   i_ngh_tembed, i_ngh_efeat, mask)
             sampling_feats.append(local)
 
         # fuse feats under different sampling strategies

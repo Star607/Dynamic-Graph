@@ -1,11 +1,13 @@
 from datetime import datetime
 import math
+from multiprocessing import Process, Queue
 import logging
 import time
 import random
 import os
 import sys
 import argparse
+from torch.utils import data
 
 from tqdm import trange
 import torch
@@ -20,7 +22,7 @@ from sklearn.metrics import roc_auc_score
 
 from data_loader.data_util import load_graph, load_label_data
 from torch_model.sampling_tgat import TGAN, SamplingFusion, LGFusion
-from tgat.sampling import NeighborFinder
+from tgat.sampling import NeighborFinder, NeighborLoader
 from model.utils import EarlyStopMonitor, RandEdgeSampler, get_free_gpu
 
 
@@ -128,7 +130,7 @@ if True:
 def set_logger():
     numba_logger = logging.getLogger('numba')
     numba_logger.setLevel(logging.WARNING)
-    
+
     # set up logger
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger()
@@ -151,29 +153,18 @@ def set_logger():
 logger = set_logger()
 
 
-def eval_one_epoch(hint, model, src, dst, ts, label, global_anchors=None):
+def eval_one_epoch(hint, model, data_loader, label, global_anchors=None):
+    data_loader.reset()
     with torch.no_grad():
         model = model.eval()
         TEST_BATCH_SIZE = args.bs
-        num_test_instance = len(src)
-        num_test_batch = math.ceil(len(src) / TEST_BATCH_SIZE)
         scores = []
-
-        for k in range(num_test_batch):
-            s_idx = k * TEST_BATCH_SIZE
-            e_idx = min(s_idx + TEST_BATCH_SIZE, num_test_instance)
-            src_l_cut = src[s_idx:e_idx]
-            dst_l_cut = dst[s_idx:e_idx]
-            ts_l_cut = ts[s_idx:e_idx]
+        while not data_loader.end():
+            src_list, dst_list = data_loader.next_batch()
             if global_anchors is None:
-                prob_score = model.forward(src_l_cut, dst_l_cut,
-                                           ts_l_cut).sigmoid()
+                prob_score = model(src_list, dst_list).sigmoid()
             else:
-                prob_score = model.forward(
-                    src_l_cut,
-                    dst_l_cut,
-                    ts_l_cut,
-                    global_anchors=global_anchors).sigmoid()
+                prob_score = model(src_list, dst_list, global_anchors=global_anchors).sigmoid()
             scores.extend(list(prob_score.cpu().numpy()))
         pred_label = np.array(scores) > 0.5
         pred_prob = np.array(scores)
@@ -233,7 +224,8 @@ def set_random_seed():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-
+set_random_seed()
+k_sampler = 2
 # Initialize the data structure for graph and edge sampling
 # build the graph for fast query
 adj_list = [[] for _ in range(max_idx + 1)]
@@ -241,6 +233,7 @@ for src, dst, eidx, ts in zip(train_src_l, train_dst_l, train_e_idx_l,
                               train_ts_l):
     adj_list[src].append((dst, eidx, ts))
     adj_list[dst].append((src, eidx, ts))
+train_ngh_finder = NeighborFinder(adj_list, uniform=False)
 train_ngh_finders = [
     NeighborFinder(adj_list, uniform=True),
     NeighborFinder(adj_list, uniform=False)
@@ -251,6 +244,7 @@ full_adj_list = [[] for _ in range(max_idx + 1)]
 for src, dst, eidx, ts in zip(src_l, dst_l, e_idx_l, ts_l):
     full_adj_list[src].append((dst, eidx, ts))
     full_adj_list[dst].append((src, eidx, ts))
+full_ngh_finder = NeighborFinder(full_adj_list, uniform=False)
 full_ngh_finders = [
     NeighborFinder(full_adj_list, uniform=True),
     NeighborFinder(full_adj_list, uniform=False)
@@ -292,6 +286,25 @@ logger.info('num of training instances: {}'.format(num_instance))
 logger.info('num of batches per epoch: {}'.format(num_batch))
 idx_list = np.arange(num_instance)
 np.random.shuffle(idx_list)
+train_nodes = (train_src_l, train_dst_l, train_src_l)
+train_loader = NeighborLoader(train_ngh_finder, NUM_LAYER,
+                              train_nodes,
+                              train_ts_l,
+                              device,
+                              batch_size=BATCH_SIZE,
+                              shuffle=True)
+val_nodes = (val_src_l, val_dst_l)
+val_loader = NeighborLoader(full_ngh_finder, NUM_LAYER,
+                            val_nodes,
+                            val_ts_l,
+                            device,
+                            batch_size=BATCH_SIZE)
+test_nodes = (test_src_l, test_dst_l)
+test_loader = NeighborLoader(full_ngh_finder, NUM_LAYER,
+                             test_nodes,
+                             val_ts_l,
+                             device,
+                             batch_size=BATCH_SIZE)
 
 early_stopper = EarlyStopMonitor()
 epoch_bar = trange(NUM_EPOCH)
@@ -301,15 +314,15 @@ for epoch in epoch_bar:
     model.samplers = train_ngh_finders
     np.random.shuffle(idx_list)
     batch_bar = trange(num_batch)
-    for k in batch_bar:
-        s_idx = k * BATCH_SIZE
-        e_idx = min(num_instance - 1, s_idx + BATCH_SIZE)
-        src_l_cut = train_src_l[s_idx:e_idx]
-        dst_l_cut = train_dst_l[s_idx:e_idx]
-        ts_l_cut = train_ts_l[s_idx:e_idx]
-        size = len(src_l_cut)
-        src_l_fake, dst_l_fake = train_rand_sampler.sample(size)
 
+    src_l_fake, dst_l_fake = train_rand_sampler.sample(len(train_src_l))
+    src_nodes = (train_src_l, train_dst_l, dst_l_fake)
+    train_loader.src_nodes = src_nodes
+    train_loader.reset()
+    for k in batch_bar:
+        src_l_cut, dst_l_cut, dst_l_fake = train_loader.next_batch()
+        src_nodes, src_eids, src_time = src_l_cut
+        size = len(src_nodes[0])
         with torch.no_grad():
             pos_label = torch.ones(size, dtype=torch.float, device=device)
             neg_label = torch.zeros(size, dtype=torch.float, device=device)
@@ -317,7 +330,7 @@ for epoch in epoch_bar:
         optimizer.zero_grad()
         model = model.train()
         pos_prob, neg_prob = model.contrast(src_l_cut, dst_l_cut, dst_l_fake,
-                                           ts_l_cut, NUM_NEIGHBORS)
+                                            NUM_NEIGHBORS)
         loss = criterion(pos_prob, pos_label)
         loss += criterion(neg_prob, neg_label)
 
@@ -335,12 +348,10 @@ for epoch in epoch_bar:
             f1 = f1_score(true_label, pred_label)
             auc = roc_auc_score(true_label, pred_score)
             batch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
-
     # validation phase use all information
     model.samplers = full_ngh_finders
     val_acc, val_ap, val_f1, val_auc = eval_one_epoch('val for old nodes',
-                                                      model, val_src_l,
-                                                      val_dst_l, val_ts_l,
+                                                      model, val_loader,
                                                       val_label_l)
     epoch_bar.update()
     epoch_bar.set_postfix(acc=val_acc, f1=val_f1, auc=val_auc)
@@ -360,11 +371,9 @@ logger.info(
 model.eval()
 # testing phase use all information
 model.samplers = full_ngh_finders
-_, _, _, val_auc = eval_one_epoch('val for old nodes', model, val_src_l,
-                                  val_dst_l, val_ts_l, val_label_l)
+_, _, _, val_auc = eval_one_epoch('val for old nodes', model, val_loader, val_label_l)
 test_acc, test_ap, test_f1, test_auc = eval_one_epoch('test for old nodes',
-                                                      model, test_src_l,
-                                                      test_dst_l, test_ts_l,
+                                                      model, test_loader,
                                                       test_label_l)
 
 logger.info('Test statistics: acc: {:.4f}, f1:{:.4f} auc: {:.4f}'.format(
@@ -383,7 +392,6 @@ if not os.path.exists(res_path):
     os.chmod(res_path, 0o777)
 config = f"n_layer=2,n_head=2,time=True,freeze={args.freeze}"
 with open(res_path, "a") as file:
-    file.write(
-        "{},{},{:.4f},{:.4f},{:.4f},{:.4f},\" {}\"".
-        format(args.model, DATA, val_auc, test_acc, test_f1, test_auc, config))
+    file.write("{},{},{:.4f},{:.4f},{:.4f},{:.4f},\" {}\"".format(
+        args.model, DATA, val_auc, test_acc, test_f1, test_auc, config))
     file.write("\n")
