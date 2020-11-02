@@ -275,8 +275,10 @@ class Wrapper(object):
 class NeighborStream(threading.Thread):
     """Transform the numpy arrays to pytorch tensors on the specified device.
     """
-    def __init__(self, queues, device, batch_num) -> None:
-        self.device_queues = [queue.Queue(maxsize=20) for _ in queues]
+    def __init__(self, queues, device, batch_num, maxsize=20) -> None:
+        super(NeighborStream, self).__init__()
+        self.cpu_queues = queues
+        self.device_queues = [queue.Queue(maxsize=maxsize) for _ in queues]
         self.device = device
         self.batch_num = batch_num
         self.stream = torch.cuda.Stream()
@@ -287,7 +289,7 @@ class NeighborStream(threading.Thread):
     def run(self):
         with torch.cuda.stream(self.stream):
             for _ in range(self.batch_num):
-                batch = [q.get(block=True) for q in self.ques]
+                batch = [q.get(block=True) for q in self.cpu_queues]
                 # device_batch = []
                 for el, q in zip(batch, self.device_queues):
                     nodes, eids, tbatch = el
@@ -323,16 +325,23 @@ class NeighborLoader(object):
             self.ts_list = self.ts_list[self.idx_list]
         self.batch_num = 0
 
-        self.ques = [Queue(maxsize=20) for _ in range(len(self.src_nodes))]
+        maxsize = 100
+        cpu_ques = [Queue(maxsize=maxsize) for _ in range(len(self.src_nodes))]
         for i, nodes in enumerate(self.src_nodes):
             node_generator = Wrapper(nodes, self.batch_size)
             ts_generator = Wrapper(self.ts_list, self.batch_size)
-            s = NeighborProcess(node_generator, ts_generator, self.ngh_finder, self.num_layer, self.ques[i])
+            s = NeighborProcess(node_generator, ts_generator, self.ngh_finder, self.num_layer, cpu_ques[i])
             s.start()
+        
+        stream = NeighborStream(cpu_ques, self.device, len(self), maxsize=maxsize)
+        self.ques = stream.get_queues()
+        stream.start()
+        
     
     def __len__(self):
         r = 1 if len(self.ts_list) % self.batch_size > 0 else 0
         return len(self.ts_list) // self.batch_size + r
+
     def end(self):
         return self.batch_num * self.batch_size >= self.num
     
@@ -341,6 +350,8 @@ class NeighborLoader(object):
             raise StopIteration
         # Here we wait for the queue productions.
         batch = [q.get(block=True) for q in self.ques]
+        self.batch_num += 1
+        return batch
         gpu_batch = []
         for el in batch:
             nodes, eids, tbatch = el
