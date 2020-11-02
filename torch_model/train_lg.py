@@ -178,13 +178,21 @@ if True:
     g_df = edges[["from_node_id", "to_node_id", "timestamp"]].copy()
     g_df["idx"] = np.arange(1, len(g_df) + 1)
     g_df.columns = ["u", "i", "ts", "idx"]
-    bound = np.sqrt(6 / (2 * NODE_DIM))
-    if args.freeze:
+
+    if len(edges.columns) > 4:
         e_feat = edges.iloc[:, 4:].to_numpy()
-        NODE_DIM = e_feat.shape[1]
-        n_feat = np.zeros((n_nodes + 1, NODE_DIM))
+        padding = np.zeros((1, e_feat.shape[1]))
+        e_feat = np.concatenate((padding, e_feat))
     else:
         e_feat = np.zeros((len(g_df) + 1, NODE_DIM))
+
+    if args.freeze:
+        # e_feat = edges.iloc[:, 4:].to_numpy()
+        # NODE_DIM = e_feat.shape[1]
+        n_feat = np.zeros((n_nodes + 1, NODE_DIM))
+    else:
+        # e_feat = np.zeros((len(g_df) + 1, NODE_DIM))
+        bound = np.sqrt(6 / (2 * NODE_DIM))
         n_feat = np.random.uniform(-bound, bound, (n_nodes + 1, NODE_DIM))
 
     src_l = g_df.u.values
@@ -302,7 +310,7 @@ val_loader = NeighborLoader(full_ngh_finder, NUM_LAYER,
 test_nodes = (test_src_l, test_dst_l)
 test_loader = NeighborLoader(full_ngh_finder, NUM_LAYER,
                              test_nodes,
-                             val_ts_l,
+                             test_ts_l,
                              device,
                              batch_size=BATCH_SIZE)
 
@@ -390,7 +398,7 @@ if not os.path.exists(res_path):
     f.write(",".join(headers) + "\r\n")
     f.close()
     os.chmod(res_path, 0o777)
-config = f"n_layer=2,n_head=2,time=True,freeze={args.freeze}"
+config = f"n_layer={NUM_LAYER},n_head={NUM_HEADS},time={USE_TIME},freeze={args.freeze}"
 with open(res_path, "a") as file:
     file.write("{},{},{:.4f},{:.4f},{:.4f},{:.4f},\" {}\"".format(
         args.model, DATA, val_auc, test_acc, test_f1, test_auc, config))
