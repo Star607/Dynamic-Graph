@@ -1,6 +1,5 @@
 from multiprocessing import Process, Queue
 import queue
-from sys import maxsize
 import threading
 import numpy as np
 from numpy.core.shape_base import block
@@ -281,7 +280,7 @@ class NeighborStream(threading.Thread):
         self.device_queues = [queue.Queue(maxsize=maxsize) for _ in queues]
         self.device = device
         self.batch_num = batch_num
-        self.stream = torch.cuda.Stream()
+        self.stream = torch.cuda.Stream(device)
     
     def get_queues(self):
         return self.device_queues
@@ -304,19 +303,22 @@ class NeighborStream(threading.Thread):
 class NeighborLoader(object):
     """Given the ngh_finder and source nodes, `NeighborLoader` provides batch-wise `k`-hop neighbors of a batch of source nodes.
     """
-    def __init__(self, ngh_finder, num_layer, src_nodes, ts_list, device, batch_size=128, shuffle=False) -> None:
+    def __init__(self, ngh_finder, num_layer, src_nodes, ts_list, device, batch_size=128, shuffle=False, gpu_stream=False) -> None:
         self.ngh_finder = ngh_finder
         self.num_layer = num_layer
         self.src_nodes = src_nodes # a list of source nodes, destination nodes
         self.ts_list = ts_list
+
         self.device = device
         self.batch_size = batch_size
         self.idx_list = np.arange(len(ts_list))
         self.num = len(self.src_nodes[0])
         assert np.all([len(nodes) == self.num for nodes in src_nodes])
+
         self.batch_num = 0
         self.shuffle = shuffle
         self.ques = []
+        self.gpu_stream = gpu_stream
     
     def reset(self):
         if self.shuffle:
@@ -332,11 +334,13 @@ class NeighborLoader(object):
             ts_generator = Wrapper(self.ts_list, self.batch_size)
             s = NeighborProcess(node_generator, ts_generator, self.ngh_finder, self.num_layer, cpu_ques[i])
             s.start()
-        
-        stream = NeighborStream(cpu_ques, self.device, len(self), maxsize=maxsize)
-        self.ques = stream.get_queues()
-        stream.start()
-        
+
+        if self.gpu_stream: 
+            stream = NeighborStream(cpu_ques, self.device, len(self), maxsize=maxsize)
+            self.ques = stream.get_queues()
+            stream.start()
+        else:
+            self.ques = cpu_ques
     
     def __len__(self):
         r = 1 if len(self.ts_list) % self.batch_size > 0 else 0
@@ -350,8 +354,9 @@ class NeighborLoader(object):
             raise StopIteration
         # Here we wait for the queue productions.
         batch = [q.get(block=True) for q in self.ques]
-        self.batch_num += 1
-        return batch
+        if self.gpu_stream:
+            self.batch_num += 1
+            return batch
         gpu_batch = []
         for el in batch:
             nodes, eids, tbatch = el
