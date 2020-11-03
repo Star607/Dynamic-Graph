@@ -470,24 +470,24 @@ class NeighborLoader(object):
         # Here we wait for the queue productions.
         batch = [q.get(block=True) for q in self.ques]
         if self.gpu_stream:
-            self.batch_num += 1
-            return batch
-        gpu_batch = []
-        for el in batch:
-            nodes, eids, tbatch = el
-            ngh_nodes_th = [
-                torch.from_numpy(n.flatten()).long().to(self.device)
-                for n in nodes
-            ]
-            ngh_eids_th = [
-                torch.from_numpy(e.flatten()).long().to(self.device)
-                for e in eids
-            ]
-            ngh_t_th = [
-                torch.from_numpy(t.flatten()).float().to(self.device)
-                for t in tbatch
-            ]
-            gpu_batch.append((ngh_nodes_th, ngh_eids_th, ngh_t_th))
+            gpu_batch = batch
+        else:
+            gpu_batch = []
+            for el in batch:
+                nodes, eids, tbatch = el
+                ngh_nodes_th = [
+                    torch.from_numpy(n.flatten()).long().to(self.device)
+                    for n in nodes
+                ]
+                ngh_eids_th = [
+                    torch.from_numpy(e.flatten()).long().to(self.device)
+                    for e in eids
+                ]
+                ngh_t_th = [
+                    torch.from_numpy(t.flatten()).float().to(self.device)
+                    for t in tbatch
+                ]
+                gpu_batch.append((ngh_nodes_th, ngh_eids_th, ngh_t_th))
         self.batch_num += 1
 
         if self.anchors is not None:
