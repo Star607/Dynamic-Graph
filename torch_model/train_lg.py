@@ -34,6 +34,8 @@ def config_parser():
                         type=str,
                         help='data sources to use',
                         default='JODIE-wikipedia')
+    parser.add_argument("--display", dest="display", action="store_true")
+    parser.add_argument("--no-display", dest="display", action="store_false")
     parser.add_argument('-f', '--freeze', action='store_true')
     parser.add_argument('--model',
                         default='SamplingFusion',
@@ -329,12 +331,12 @@ if args.model == "LG":
         loader.set_anchors(anchors)
 
 early_stopper = EarlyStopMonitor()
-epoch_bar = trange(NUM_EPOCH)
+epoch_bar = trange(NUM_EPOCH, disable=(not args.display))
 for epoch in epoch_bar:
     # Training
     # training use only training graph
     np.random.shuffle(idx_list)
-    batch_bar = trange(num_batch)
+    batch_bar = trange(num_batch, disable=(not args.display))
 
     src_l_fake, dst_l_fake = train_rand_sampler.sample(len(train_src_l))
     src_nodes = (train_src_l, train_dst_l, dst_l_fake)
