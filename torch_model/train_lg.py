@@ -417,6 +417,6 @@ if not os.path.exists(res_path):
 config = f"freeze={args.freeze},sampling={args.sampling},model={args.model}"
 config += f",num_anchors={args.n_anchors},metric={args.metric}"
 with open(res_path, "a") as file:
-    file.write("{},{},{:.4f},{:.4f},{:.4f},{:.4f},\" {}\"".format(
+    file.write("{},{},{:.4f},{:.4f},{:.4f},{:.4f},\"{}\"".format(
         args.model, DATA, val_auc, test_acc, test_f1, test_auc, config))
     file.write("\n")

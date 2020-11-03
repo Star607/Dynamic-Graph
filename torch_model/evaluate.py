@@ -74,12 +74,12 @@ def evaluate_lg(pdir="/nfs/zty/Graph/Dynamic-Graph"):
     else:
         default = "python -m torch_model.train_lg -d {} --no-display "
     cmds = []
-    cmds.append(default + " --model TGAT")
+    cmds.append(default + " --model TGAT -f")
     cmds.append(default + " --model SamplingFusion")
     cmds.append(default + " --model LG")
     for data in fname:
         for cmd in cmds:
-            os.system(cmd)
+            os.system(cmd.format(data))
 
 
 if __name__ == "__main__":
