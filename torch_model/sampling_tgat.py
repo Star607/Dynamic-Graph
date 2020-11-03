@@ -132,25 +132,29 @@ class LGFusion(SamplingFusion):
         feat_dim = self.feat_dim
         num_layers = kwargs['num_layers']
         attn_mode = kwargs['attn_mode']
-        n_head = kwargs['n_heads']
+        n_head = kwargs['n_head']
         drop_out = kwargs['drop_out']
 
-        self.global_fusion = MultiHeadAttention(1,
+        self.global_fusion = MultiHeadAttention(n_head,
                                                 feat_dim,
-                                                feat_dim,
-                                                feat_dim,
+                                                feat_dim // n_head,
+                                                feat_dim // n_head,
                                                 dropout=drop_out)
+    
+    def set_anchors(self, anchors_l):
+        self.anchors = anchors_l
 
     def forward(self,
                 src_idx_l,
                 target_idx_l,
-                cut_time_l,
-                num_neighbors=20,
-                global_anchors=None):
-        src_embed = self.lg_conv(src_idx_l, cut_time_l, self.num_layers,
-                                 num_neighbors, global_anchors)
-        target_embed = self.lg_conv(target_idx_l, cut_time_l, self.num_layers,
-                                    num_neighbors, global_anchors)
+                num_neighbors=20):
+        src_embed = self.tem_conv(src_idx_l, self.num_layers,
+                                 num_neighbors)
+        target_embed = self.tem_conv(target_idx_l, self.num_layers,
+                                    num_neighbors)
+        anchor_embed = self.tem_conv(self.anchors, self.num_layers - 1, num_neighbors)
+        src_embed = self.lg_fusion(src_embed, anchor_embed)
+        target_embed = self.lg_fusion(target_embed, anchor_embed)
         score = self.affinity_score(src_embed, target_embed).squeeze(dim=-1)
         return score
 
@@ -158,42 +162,31 @@ class LGFusion(SamplingFusion):
                  src_idx_l,
                  target_idx_l,
                  background_idx_l,
-                 cut_time_l,
                  num_neighbors=20,
-                 global_anchors=None):
-        src_embed = self.lg_conv(src_idx_l, cut_time_l, self.num_layers,
-                                 num_neighbors, global_anchors)
-        target_embed = self.lg_conv(target_idx_l, cut_time_l, self.num_layers,
-                                    num_neighbors, global_anchors)
-        background_embed = self.lg_conv(background_idx_l, cut_time_l,
-                                        self.num_layers, num_neighbors,
-                                        global_anchors)
+                 ):
+        src_embed = self.tem_conv(src_idx_l, self.num_layers,
+                                 num_neighbors)
+        target_embed = self.tem_conv(target_idx_l, self.num_layers,
+                                    num_neighbors)
+        background_embed = self.tem_conv(background_idx_l,
+                                        self.num_layers, num_neighbors)
+        
+        anchor_embed = self.tem_conv(self.anchors, self.num_layers - 1, num_neighbors)
+        src_embed = self.lg_fusion(src_embed, anchor_embed)
+        target_embed = self.lg_fusion(target_embed, anchor_embed)
+        background_embed = self.lg_fusion(background_embed, anchor_embed)
+
         pos_score = self.affinity_score(src_embed,
                                         target_embed).squeeze(dim=-1)
         neg_score = self.affinity_score(src_embed,
                                         background_embed).squeeze(dim=-1)
         return pos_score.sigmoid(), neg_score.sigmoid()
 
-    def lg_conv(self,
-                src_idx_l,
-                cut_time_l,
-                curr_layers,
-                num_neighbors=20,
-                global_anchors=None) -> torch.Tensor:
-        batch_size = len(src_idx_l)
-        num_anchors = len(global_anchors) // len(src_idx_l)
-        src_embeds = self.tem_conv(src_idx_l, cut_time_l, curr_layers,
-                                   num_neighbors)
-        ext_cut_time = cut_time_l.repeat(num_anchors)
-        global_embeds = self.tem_conv(global_anchors, ext_cut_time,
-                                      curr_layers - 1, num_neighbors)
-
-        mask = torch.zeros((batch_size, 1, num_anchors))
-        output, attn = self.global_fusion(q=src_embeds,
-                                          k=global_embeds,
-                                          v=global_embeds,
-                                          mask=mask)
+    def lg_fusion(self, src_embed, anchor_embed):
+        bsize, dim = src_embed.shape
+        src_ext = src_embed.unsqueeze(dim=1) # [B, 1, D]
+        anchor_embed = anchor_embed.view(bsize, -1, dim)
+        output, attn = self.global_fusion(q=src_ext, k=anchor_embed, v=anchor_embed)
         output = output.squeeze(1)
         attn = attn.squeeze(1)
-        output = self.merge_layer(output, src_embeds)
-        return output
+        return src_embed + output

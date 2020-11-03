@@ -23,7 +23,7 @@ from sklearn.metrics import roc_auc_score
 
 from data_loader.data_util import load_graph, load_label_data
 from torch_model.sampling_tgat import TGAN, SamplingFusion, LGFusion
-from tgat.sampling import NeighborFinder, BiSamplingNFinder, NeighborLoader
+from tgat.sampling import NeighborFinder, BiSamplingNFinder, NeighborLoader, global_anchors
 from model.utils import EarlyStopMonitor, RandEdgeSampler, get_free_gpu
 
 
@@ -102,6 +102,8 @@ def config_parser():
                         default="bisampling",
                         choices=["ngh_finder", "bisampling"],
                         help="Whether use normal sampling or binary sampling.")
+    parser.add_argument("-n-anchors", type=int, default=20)
+    parser.add_argument("--metric", default="pagerank", choices=["pagerank", "degree", "closeness", "betweenness"])
     return parser
 
 
@@ -156,9 +158,9 @@ def set_logger():
 
 
 logger = set_logger()
+logger.info(args)
 
-
-def eval_one_epoch(hint, model, data_loader, label, global_anchors=None):
+def eval_one_epoch(hint, model, data_loader, label):
     data_loader.reset()
     with torch.no_grad():
         model = model.eval()
@@ -166,12 +168,9 @@ def eval_one_epoch(hint, model, data_loader, label, global_anchors=None):
         scores = []
         while not data_loader.end():
             src_list, dst_list = data_loader.next_batch()
-            if global_anchors is None:
-                prob_score = model(src_list, dst_list).sigmoid()
-            else:
-                prob_score = model(src_list,
-                                   dst_list,
-                                   global_anchors=global_anchors).sigmoid()
+            if args.model == "LG":
+                model.set_anchors(data_loader.batch_anchor)
+            prob_score = model(src_list, dst_list).sigmoid()
             scores.extend(list(prob_score.cpu().numpy()))
         pred_label = np.array(scores) > 0.5
         pred_prob = np.array(scores)
@@ -263,20 +262,6 @@ else:
     raise NotImplementedError(args.sampling)
 
 train_rand_sampler = RandEdgeSampler(train_src_l, train_dst_l)
-# train_ngh_finder = NeighborFinder(adj_list, uniform=False)
-# train_ngh_finders = [
-#     NeighborFinder(adj_list, uniform=True),
-#     NeighborFinder(adj_list, uniform=False)
-# ]
-
-# full graph with all the data for the test and validation purpose
-
-# full_ngh_finder = NeighborFinder(full_adj_list, uniform=False)
-# full_ngh_finders = [
-#     NeighborFinder(full_adj_list, uniform=True),
-#     NeighborFinder(full_adj_list, uniform=False)
-# ]
-
 
 # Model initialize
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -336,6 +321,13 @@ test_loader = NeighborLoader(full_ngh_finder,
                              device,
                              batch_size=BATCH_SIZE)
 
+# set anchors for both data_loaders and models
+if args.model == "LG":
+    edges = list(zip(train_src_l, train_dst_l))
+    anchors = global_anchors(edges, n_anchors=args.n_anchors, metric=args.metric)
+    for loader in [train_loader, val_loader, test_loader]:
+        loader.set_anchors(anchors)
+
 early_stopper = EarlyStopMonitor()
 epoch_bar = trange(NUM_EPOCH)
 for epoch in epoch_bar:
@@ -358,6 +350,8 @@ for epoch in epoch_bar:
 
         optimizer.zero_grad()
         model = model.train()
+        if args.model == "LG":
+            model.set_anchors(train_loader.batch_anchor)
         pos_prob, neg_prob = model.contrast(src_l_cut, dst_l_cut, dst_l_fake,
                                             NUM_NEIGHBORS)
         loss = criterion(pos_prob, pos_label)
@@ -418,7 +412,8 @@ if not os.path.exists(res_path):
     f.write(",".join(headers) + "\r\n")
     f.close()
     os.chmod(res_path, 0o777)
-config = f"n_layer={NUM_LAYER},n_head={NUM_HEADS},time={USE_TIME},freeze={args.freeze}"
+config = f"freeze={args.freeze},sampling={args.sampling},model={args.model}"
+config += f",num_anchors={args.n_anchors},metric={args.metric}"
 with open(res_path, "a") as file:
     file.write("{},{},{:.4f},{:.4f},{:.4f},{:.4f},\" {}\"".format(
         args.model, DATA, val_auc, test_acc, test_f1, test_auc, config))

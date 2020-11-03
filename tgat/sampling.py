@@ -5,6 +5,7 @@ import numpy as np
 from numpy.core.shape_base import block
 import torch
 from torch.utils.data import Dataset, DataLoader
+import networkx as nx
 from numba import jit, prange
 import bisect
 
@@ -291,6 +292,24 @@ class BiSamplingNFinder(NeighborFinder):
                              self.off_set_l,
                              num_neighbors=num_neighbors)
 
+# @jit
+def global_anchors(edges, n_anchors=20, metric="pagerank"):
+    mg = nx.MultiGraph()
+    mg.add_edges_from(edges, weight=1.0) 
+    if metric == "pagerank":
+        scores = nx.pagerank_scipy(mg)
+    elif metric == "degree":
+        scores = nx.degree_centrality(mg)
+    elif metric == "closeness":
+        scores = nx.closeness_centrality(mg)
+    elif metric == "betweenness":
+        scores = nx.betweenness_centrality(mg)
+    else:
+        raise NotImplementedError(metric)
+    keys = np.array(list(scores.keys()))
+    vals = np.array(list(scores.values()))
+    return keys[vals.argsort()[-n_anchors:]]
+
 
 class NeighborProcess(Process):
     def __init__(self, node_generator, ts_generator, ngh_finder, k, q) -> None:
@@ -394,6 +413,10 @@ class NeighborLoader(object):
         self.shuffle = shuffle
         self.ques = []
         self.gpu_stream = gpu_stream
+        self.anchors = None
+    
+    def set_anchors(self, anchors):
+        self.anchors = anchors
 
     def reset(self):
         if self.shuffle:
@@ -410,6 +433,19 @@ class NeighborLoader(object):
             s = NeighborProcess(node_generator, ts_generator, self.ngh_finder,
                                 self.num_layer, cpu_ques[i])
             s.start()
+
+        if self.anchors is not None:
+            cpu_ques.append(Queue(maxsize=maxsize))
+            anchors = np.expand_dims(self.anchors, axis=0)
+            anchors = anchors.repeat(self.num, axis=0).flatten()
+            anchor_generator = Wrapper(anchors, self.batch_size * len(self.anchors))
+
+            ts_list = self.ts_list.repeat(len(self.anchors))
+            ts_generator = Wrapper(ts_list, self.batch_size * len(self.anchors))
+            s = NeighborProcess(anchor_generator, ts_generator, self.ngh_finder,
+                                self.num_layer - 1, cpu_ques[-1])
+            s.start()
+
 
         if self.gpu_stream:
             stream = NeighborStream(cpu_ques,
@@ -453,4 +489,9 @@ class NeighborLoader(object):
             ]
             gpu_batch.append((ngh_nodes_th, ngh_eids_th, ngh_t_th))
         self.batch_num += 1
-        return gpu_batch
+
+        if self.anchors is not None:
+            self.batch_anchor = gpu_batch[-1]
+            return gpu_batch[:-1]
+        else:
+            return gpu_batch
