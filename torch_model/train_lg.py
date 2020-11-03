@@ -7,6 +7,7 @@ import random
 import os
 import sys
 import argparse
+from numba import jit
 from torch.utils import data
 
 from tqdm import trange
@@ -22,7 +23,7 @@ from sklearn.metrics import roc_auc_score
 
 from data_loader.data_util import load_graph, load_label_data
 from torch_model.sampling_tgat import TGAN, SamplingFusion, LGFusion
-from tgat.sampling import NeighborFinder, NeighborLoader
+from tgat.sampling import NeighborFinder, BiSamplingNFinder, NeighborLoader
 from model.utils import EarlyStopMonitor, RandEdgeSampler, get_free_gpu
 
 
@@ -32,11 +33,11 @@ def config_parser():
                         '--data',
                         type=str,
                         help='data sources to use',
-                        default='ia-contact')
+                        default='JODIE-wikipedia')
     parser.add_argument('-f', '--freeze', action='store_true')
     parser.add_argument('--model',
                         default='SamplingFusion',
-                        choices=['SamplingFusion', 'LG'])
+                        choices=['TGAT', 'SamplingFusion', 'LG'])
     parser.add_argument('--bs', type=int, default=200, help='batch_size')
     parser.add_argument('--prefix',
                         type=str,
@@ -96,7 +97,11 @@ def config_parser():
     parser.add_argument('--uniform',
                         action='store_true',
                         help='take uniform sampling from temporal neighbors')
-    parser.add_argument('--inverse', default='distribution')
+    parser.add_argument("-s",
+                        "--sampling",
+                        default="bisampling",
+                        choices=["ngh_finder", "bisampling"],
+                        help="Whether use normal sampling or binary sampling.")
     return parser
 
 
@@ -164,7 +169,9 @@ def eval_one_epoch(hint, model, data_loader, label, global_anchors=None):
             if global_anchors is None:
                 prob_score = model(src_list, dst_list).sigmoid()
             else:
-                prob_score = model(src_list, dst_list, global_anchors=global_anchors).sigmoid()
+                prob_score = model(src_list,
+                                   dst_list,
+                                   global_anchors=global_anchors).sigmoid()
             scores.extend(list(prob_score.cpu().numpy()))
         pred_label = np.array(scores) > 0.5
         pred_prob = np.array(scores)
@@ -232,33 +239,44 @@ def set_random_seed():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 set_random_seed()
-k_sampler = 2
 # Initialize the data structure for graph and edge sampling
 # build the graph for fast query
-adj_list = [[] for _ in range(max_idx + 1)]
-for src, dst, eidx, ts in zip(train_src_l, train_dst_l, train_e_idx_l,
-                              train_ts_l):
-    adj_list[src].append((dst, eidx, ts))
-    adj_list[dst].append((src, eidx, ts))
-train_ngh_finder = NeighborFinder(adj_list, uniform=False)
-train_ngh_finders = [
-    NeighborFinder(adj_list, uniform=True),
-    NeighborFinder(adj_list, uniform=False)
-]
+# @jit
+def build_graph(src_l, dst_l, e_idx_l, ts_l):
+    adj_list = [[] for _ in range(max_idx + 1)]
+    for src, dst, eidx, ts in zip(src_l, dst_l, e_idx_l, ts_l):
+        adj_list[src].append((dst, eidx, ts))
+        adj_list[dst].append((src, eidx, ts))
+    return adj_list
+adj_list = build_graph(train_src_l, train_dst_l, train_e_idx_l, train_ts_l)
+full_adj_list = build_graph(src_l, dst_l, e_idx_l, ts_l)
 
-# full graph with all the data for the test and validation purpose
-full_adj_list = [[] for _ in range(max_idx + 1)]
-for src, dst, eidx, ts in zip(src_l, dst_l, e_idx_l, ts_l):
-    full_adj_list[src].append((dst, eidx, ts))
-    full_adj_list[dst].append((src, eidx, ts))
-full_ngh_finder = NeighborFinder(full_adj_list, uniform=False)
-full_ngh_finders = [
-    NeighborFinder(full_adj_list, uniform=True),
-    NeighborFinder(full_adj_list, uniform=False)
-]
+if args.sampling == "ngh_finder":
+    train_ngh_finder = NeighborFinder(adj_list, uniform=UNIFORM)
+    full_ngh_finder = NeighborFinder(full_adj_list, uniform=UNIFORM)
+elif args.sampling == "bisampling":
+    train_ngh_finder = BiSamplingNFinder(adj_list)
+    full_ngh_finder = BiSamplingNFinder(full_adj_list)
+else:
+    raise NotImplementedError(args.sampling)
 
 train_rand_sampler = RandEdgeSampler(train_src_l, train_dst_l)
+# train_ngh_finder = NeighborFinder(adj_list, uniform=False)
+# train_ngh_finders = [
+#     NeighborFinder(adj_list, uniform=True),
+#     NeighborFinder(adj_list, uniform=False)
+# ]
+
+# full graph with all the data for the test and validation purpose
+
+# full_ngh_finder = NeighborFinder(full_adj_list, uniform=False)
+# full_ngh_finders = [
+#     NeighborFinder(full_adj_list, uniform=True),
+#     NeighborFinder(full_adj_list, uniform=False)
+# ]
+
 
 # Model initialize
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -266,12 +284,13 @@ device = torch.device('cuda:{}'.format(GPU))
 if args.model == "SamplingFusion":
     Model = SamplingFusion
 elif args.model == "LG":
-    model = LGFusion
+    Model = LGFusion
+elif args.model == "TGAT":
+    Model = TGAN
 else:
     raise NotImplementedError(args.model)
 
-model = Model(len(train_ngh_finders),
-              train_ngh_finders[0],
+model = Model(train_ngh_finder,
               n_feat,
               e_feat,
               n_feat_freeze=args.freeze,
@@ -295,20 +314,23 @@ logger.info('num of batches per epoch: {}'.format(num_batch))
 idx_list = np.arange(num_instance)
 np.random.shuffle(idx_list)
 train_nodes = (train_src_l, train_dst_l, train_src_l)
-train_loader = NeighborLoader(train_ngh_finder, NUM_LAYER,
+train_loader = NeighborLoader(train_ngh_finder,
+                              NUM_LAYER,
                               train_nodes,
                               train_ts_l,
                               device,
                               batch_size=BATCH_SIZE,
                               shuffle=True)
 val_nodes = (val_src_l, val_dst_l)
-val_loader = NeighborLoader(full_ngh_finder, NUM_LAYER,
+val_loader = NeighborLoader(full_ngh_finder,
+                            NUM_LAYER,
                             val_nodes,
                             val_ts_l,
                             device,
                             batch_size=BATCH_SIZE)
 test_nodes = (test_src_l, test_dst_l)
-test_loader = NeighborLoader(full_ngh_finder, NUM_LAYER,
+test_loader = NeighborLoader(full_ngh_finder,
+                             NUM_LAYER,
                              test_nodes,
                              test_ts_l,
                              device,
@@ -319,7 +341,6 @@ epoch_bar = trange(NUM_EPOCH)
 for epoch in epoch_bar:
     # Training
     # training use only training graph
-    model.samplers = train_ngh_finders
     np.random.shuffle(idx_list)
     batch_bar = trange(num_batch)
 
@@ -357,7 +378,6 @@ for epoch in epoch_bar:
             auc = roc_auc_score(true_label, pred_score)
             batch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
     # validation phase use all information
-    model.samplers = full_ngh_finders
     val_acc, val_ap, val_f1, val_auc = eval_one_epoch('val for old nodes',
                                                       model, val_loader,
                                                       val_label_l)
@@ -378,8 +398,8 @@ logger.info(
     f'Loaded the best model at epoch {early_stopper.best_epoch} for inference')
 model.eval()
 # testing phase use all information
-model.samplers = full_ngh_finders
-_, _, _, val_auc = eval_one_epoch('val for old nodes', model, val_loader, val_label_l)
+_, _, _, val_auc = eval_one_epoch('val for old nodes', model, val_loader,
+                                  val_label_l)
 test_acc, test_ap, test_f1, test_auc = eval_one_epoch('test for old nodes',
                                                       model, test_loader,
                                                       test_label_l)

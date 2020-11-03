@@ -29,19 +29,21 @@ class SoftmaxAttention(nn.Module):
 
 
 class SamplingFusion(TGAN):
-    def __init__(self, k_samplers: int, *args, **kwargs) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         super(SamplingFusion, self).__init__(*args, **kwargs)
         feat_dim = self.feat_dim
         num_layers = kwargs['num_layers']
 
+        self.k_samplers = 2
         self.fusion_layer_list = torch.nn.ModuleList([
-            SoftmaxAttention(feat_dim, k_samplers) for _ in range(num_layers)
+            SoftmaxAttention(feat_dim, self.k_samplers)
+            for _ in range(num_layers)
         ])
-        self.k_samplers = k_samplers
 
     def forward(self, src_idx_l, target_idx_l, num_neighbors=20):
         src_embed = self.tem_conv(src_idx_l, self.num_layers, num_neighbors)
-        target_embed = self.tem_conv(target_idx_l, self.num_layers, num_neighbors)
+        target_embed = self.tem_conv(target_idx_l, self.num_layers,
+                                     num_neighbors)
         score = self.affinity_score(src_embed, target_embed).squeeze(dim=-1)
         return score
 

@@ -82,7 +82,7 @@ def get_temporal_neighbor_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l,
         #     # out_ngh_node_batch[i, :] = ngh_idx[sampled_idx]
         #     # out_ngh_t_batch[i, :] = ngh_ts[sampled_idx]
         #     # out_ngh_eidx_batch[i, :] = ngh_eidx[sampled_idx]
-           
+
         # else:
         #     prob = ngh_ts - cut_time
         #     prob = np.exp(prob - np.max(prob)) # avoid single zero, or overflow
@@ -227,14 +227,70 @@ class NeighborFinder:
         return node_records, eidx_records, t_records
 
 
+@jit
+def bisampling_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l, edge_idx_l,
+                  off_set_l, num_neighbors):
+    assert num_neighbors % 2 == 0
+
+    out_ngh_node_batch = np.zeros(
+        (len(src_idx_l), num_neighbors)).astype(np.int32)
+    out_ngh_t_batch = np.zeros(
+        (len(src_idx_l), num_neighbors)).astype(np.float32)
+    out_ngh_eidx_batch = np.zeros(
+        (len(src_idx_l), num_neighbors)).astype(np.int32)
+
+    for i, (src_idx, cut_time) in enumerate(zip(src_idx_l, cut_time_l)):
+        # use np.searchsorted
+        neighbors_idx = node_idx_l[off_set_l[src_idx]:off_set_l[src_idx + 1]]
+        neighbors_ts = node_ts_l[off_set_l[src_idx]:off_set_l[src_idx + 1]]
+        neighbors_e_idx = edge_idx_l[off_set_l[src_idx]:off_set_l[src_idx + 1]]
+        left = np.searchsorted(neighbors_ts, cut_time, side="left")
+        ngh_idx, ngh_eidx, ngh_ts = neighbors_idx[:left], \
+                neighbors_e_idx[:left], neighbors_ts[:left]
+
+        if len(ngh_idx) <= 0:
+            continue
+
+        half_neighbors = num_neighbors // 2
+        # uniform sampling
+        sampled_idx = np.random.randint(0, len(ngh_idx), half_neighbors)
+        sampled_idx = np.sort(sampled_idx)
+
+        out_ngh_node_batch[i, :half_neighbors] = ngh_idx[sampled_idx]
+        out_ngh_t_batch[i, :half_neighbors] = ngh_ts[sampled_idx]
+        out_ngh_eidx_batch[i, :half_neighbors] = ngh_eidx[sampled_idx]
+        ngh_ts = ngh_ts[-half_neighbors:]
+        ngh_idx = ngh_idx[-half_neighbors:]
+        ngh_eidx = ngh_eidx[-half_neighbors:]
+
+        assert (len(ngh_idx) <= half_neighbors)
+        assert (len(ngh_ts) <= half_neighbors)
+        assert (len(ngh_eidx) <= half_neighbors)
+
+        out_ngh_node_batch[i, -len(ngh_idx):] = ngh_idx
+        out_ngh_t_batch[i, -len(ngh_idx):] = ngh_ts
+        out_ngh_eidx_batch[i, -len(ngh_idx):] = ngh_eidx
+
+    return out_ngh_node_batch, out_ngh_eidx_batch, out_ngh_t_batch
+
+
 class BiSamplingNFinder(NeighborFinder):
-    def __init__(self, adj_list, samplers) -> None:
+    def __init__(self, adj_list) -> None:
+        # binary sampling: first half consists of uniform sampling, and the
+        # second hanlf consists of inverse temporal sampling.
         super(BiSamplingNFinder, self).__init__(adj_list, uniform=False)
-        # a list of sampling methods, including 'uniform' and 'inverse temporal'
-        self.samplers = samplers  
 
     def get_temporal_neighbor(self, src_idx_l, cut_time_l, num_neighbors):
-        pass
+        assert (len(src_idx_l) == len(cut_time_l))
+
+        return bisampling_nb(src_idx_l,
+                             cut_time_l,
+                             self.node_idx_l,
+                             self.node_ts_l,
+                             self.edge_idx_l,
+                             self.off_set_l,
+                             num_neighbors=num_neighbors)
+
 
 class NeighborProcess(Process):
     def __init__(self, node_generator, ts_generator, ngh_finder, k, q) -> None:
@@ -249,27 +305,30 @@ class NeighborProcess(Process):
     def run(self):
         # with torch.cuda.stream(self.stream):
         for src_nodes, ts_l in zip(self.node_generator, self.ts_generator):
-            ngh_nodes, ngh_eids, ngh_t = self.ngh_finder.find_k_hop(self.k, src_nodes, ts_l)
+            ngh_nodes, ngh_eids, ngh_t = self.ngh_finder.find_k_hop(
+                self.k, src_nodes, ts_l)
             self.q.put((ngh_nodes, ngh_eids, ngh_t), block=True)
+
 
 class Wrapper(object):
     def __init__(self, nodes, batch_size) -> None:
         self.nodes = nodes
         self.batch_size = batch_size
         self.batch_num = 0
-    
+
     def __iter__(self):
         self.batch_num = 0
         return self
-    
+
     def __next__(self):
         if self.batch_num * self.batch_size >= len(self.nodes):
             raise StopIteration
         else:
             start = self.batch_num * self.batch_size
-            batch = self.nodes[start: start + self.batch_size]
+            batch = self.nodes[start:start + self.batch_size]
             self.batch_num += 1
             return batch
+
 
 class NeighborStream(threading.Thread):
     """Transform the numpy arrays to pytorch tensors on the specified device.
@@ -281,7 +340,7 @@ class NeighborStream(threading.Thread):
         self.device = device
         self.batch_num = batch_num
         self.stream = torch.cuda.Stream(device)
-    
+
     def get_queues(self):
         return self.device_queues
 
@@ -292,21 +351,37 @@ class NeighborStream(threading.Thread):
                 # device_batch = []
                 for el, q in zip(batch, self.device_queues):
                     nodes, eids, tbatch = el
-                    ngh_nodes_th = [torch.from_numpy(n.flatten()).long().to(self.device) for n in nodes]
-                    ngh_eids_th = [torch.from_numpy(e.flatten()).long().to(self.device) for e in eids]
-                    ngh_t_th = [torch.from_numpy(t.flatten()).float().to(self.device) for t in tbatch]
+                    ngh_nodes_th = [
+                        torch.from_numpy(n.flatten()).long().to(self.device)
+                        for n in nodes
+                    ]
+                    ngh_eids_th = [
+                        torch.from_numpy(e.flatten()).long().to(self.device)
+                        for e in eids
+                    ]
+                    ngh_t_th = [
+                        torch.from_numpy(t.flatten()).float().to(self.device)
+                        for t in tbatch
+                    ]
                     q.put((ngh_nodes_th, ngh_eids_th, ngh_t_th), block=True)
                     # device_batch.append((ngh_nodes_th, ngh_eids_th, ngh_t_th))
-                
 
 
 class NeighborLoader(object):
     """Given the ngh_finder and source nodes, `NeighborLoader` provides batch-wise `k`-hop neighbors of a batch of source nodes.
     """
-    def __init__(self, ngh_finder, num_layer, src_nodes, ts_list, device, batch_size=128, shuffle=False, gpu_stream=False) -> None:
+    def __init__(self,
+                 ngh_finder,
+                 num_layer,
+                 src_nodes,
+                 ts_list,
+                 device,
+                 batch_size=128,
+                 shuffle=False,
+                 gpu_stream=False) -> None:
         self.ngh_finder = ngh_finder
         self.num_layer = num_layer
-        self.src_nodes = src_nodes # a list of source nodes, destination nodes
+        self.src_nodes = src_nodes  # a list of source nodes, destination nodes
         self.ts_list = ts_list
 
         self.device = device
@@ -319,7 +394,7 @@ class NeighborLoader(object):
         self.shuffle = shuffle
         self.ques = []
         self.gpu_stream = gpu_stream
-    
+
     def reset(self):
         if self.shuffle:
             np.random.shuffle(self.idx_list)
@@ -332,23 +407,27 @@ class NeighborLoader(object):
         for i, nodes in enumerate(self.src_nodes):
             node_generator = Wrapper(nodes, self.batch_size)
             ts_generator = Wrapper(self.ts_list, self.batch_size)
-            s = NeighborProcess(node_generator, ts_generator, self.ngh_finder, self.num_layer, cpu_ques[i])
+            s = NeighborProcess(node_generator, ts_generator, self.ngh_finder,
+                                self.num_layer, cpu_ques[i])
             s.start()
 
-        if self.gpu_stream: 
-            stream = NeighborStream(cpu_ques, self.device, len(self), maxsize=maxsize)
+        if self.gpu_stream:
+            stream = NeighborStream(cpu_ques,
+                                    self.device,
+                                    len(self),
+                                    maxsize=maxsize)
             self.ques = stream.get_queues()
             stream.start()
         else:
             self.ques = cpu_ques
-    
+
     def __len__(self):
         r = 1 if len(self.ts_list) % self.batch_size > 0 else 0
         return len(self.ts_list) // self.batch_size + r
 
     def end(self):
         return self.batch_num * self.batch_size >= self.num
-    
+
     def next_batch(self):
         if self.end():
             raise StopIteration
@@ -360,9 +439,18 @@ class NeighborLoader(object):
         gpu_batch = []
         for el in batch:
             nodes, eids, tbatch = el
-            ngh_nodes_th = [torch.from_numpy(n.flatten()).long().to(self.device) for n in nodes]
-            ngh_eids_th = [torch.from_numpy(e.flatten()).long().to(self.device) for e in eids]
-            ngh_t_th = [torch.from_numpy(t.flatten()).float().to(self.device) for t in tbatch]
+            ngh_nodes_th = [
+                torch.from_numpy(n.flatten()).long().to(self.device)
+                for n in nodes
+            ]
+            ngh_eids_th = [
+                torch.from_numpy(e.flatten()).long().to(self.device)
+                for e in eids
+            ]
+            ngh_t_th = [
+                torch.from_numpy(t.flatten()).float().to(self.device)
+                for t in tbatch
+            ]
             gpu_batch.append((ngh_nodes_th, ngh_eids_th, ngh_t_th))
         self.batch_num += 1
         return gpu_batch
