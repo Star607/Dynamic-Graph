@@ -81,13 +81,13 @@ def train_test_split(args, root_dir="/nfs/zty/Graph"):
     pass
 
 
-def negative_sampling(df, nodes, node2id):
+def negative_sampling(df, nodes, id2idx):
     df["label"] = 1
     neg_df = df.copy().reset_index(drop=True)
     neg_df["label"] = 0
     neg_toids = np.zeros(len(df), dtype=np.int32)
     for index, row in enumerate(df.itertuples()):
-        pos_idx = node2id[row.to_node_id]
+        pos_idx = id2idx[row.to_node_id]
         # swap the positive index with the last element
         nodes[-1], nodes[pos_idx] = nodes[pos_idx], nodes[-1]
         neg_idx = np.random.choice(len(nodes) - 1)
@@ -106,20 +106,21 @@ def train_test_label(args, root_dir="/nfs/zty/Graph/"):
     fname = _iterate_datasets()
     fname = fname[args.start: args.end]
     input_dirs = ["train_data", "valid_data", "test_data"]
+    columns = ["from_node_id", "to_node_id", "timestamp", "state_label"]
     for name in fname:
         print("*****{}*****".format(name))
         start = time.time()
         for indir in input_dirs:
             outdir = "label_" + indir
             print("*****{}*****".format(indir))
-            edges, nodes = _load_data(dataset=name, mode=indir)
-            id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
-            if len(nodes["role"].unique()) > 1:
-                nodes = nodes[nodes["role"] == "item"]
-                min_dst_idx = nodes["id_map"].min()
-                nodes["id_map"] = nodes["id_map"] - min_dst_idx
-                id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
-            label_df = negative_sampling(edges, nodes["node_id"].to_numpy(), id2idx)
+            edges, nodes = _load_data(dataset=name, mode="train_data")
+            edges = edges[columns]
+            # Only use to_node_ids to generate the negative samples
+            to_node_ids = edges["to_node_id"].unique()
+            to_nodes = nodes[nodes["node_id"].isin(to_node_ids)].copy()
+            id2idx = {node_id: idx for idx, node_id in enumerate(to_nodes["node_id"])}
+
+            label_df = negative_sampling(edges, to_nodes["node_id"].to_numpy(), id2idx)
             path = os.path.join(root_dir, outdir, f"{name}.edges")
             label_df.to_csv(path, index=None)
         end = time.time()
