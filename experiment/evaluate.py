@@ -295,7 +295,10 @@ def evaluate_gta():
 def evaluate_tgat(project_dir="/nfs/zty/Graph/TGAT-bk"):
     fname = iterate_datasets(dataset=args.dataset)
     fname = fname[args.start: args.end]
-    command = "python {}/exper_edge.py -d {} --gpu {} --uniform"
+    # command = "python {}/exper_edge.py -d {} --gpu {} -f --uniform "
+    # command = "python {}/exper_edge.py -d {} --gpu {} -f"
+    # command = "python {}/exper_edge.py -d {} --gpu {} --uniform"
+    command = "python {}/exper_edge.py -d {} --gpu {} --time empty  "
     commands = []
     for name in fname:
         commands.append(command.format(project_dir, name, args.gid))

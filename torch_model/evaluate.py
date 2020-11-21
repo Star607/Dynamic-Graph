@@ -35,20 +35,21 @@ def iterate_times(method):
 
 @iterate_times
 def evaluate_tgcl():
-    # fname = _iterate_datasets()
-    fname = ["ia-workplace-contacts", "ia-contact", "fb-forum", "soc-sign-bitcoinotc", "ia-escorts-dynamic",
-             "ia-retweet-pol", "ia-movielens-user2tags-10m", "soc-wiki-elec", "ia-slashdot-reply-dir", "ia-frwikinews-user-edits"]
+    fname = _iterate_datasets()
+    # fname = ["ia-workplace-contacts", "ia-contact", "fb-forum", "soc-sign-bitcoinotc", "ia-escorts-dynamic",
+    #          "ia-retweet-pol", "ia-movielens-user2tags-10m", "soc-wiki-elec", "ia-slashdot-reply-dir", "ia-frwikinews-user-edits"]
     fname = fname[args.start: args.end]
     cmds = []
     if args.display:
-        default = " --dataset {} --bidirected --gpu --gid {} --display --lr 1e-2 --lam 0.0  "
+        default = " --dataset {} --bidirected --gpu --gid {} --display --lr 1e-2 --lam 1.0  "
     else:
-        default = " --dataset {} --bidirected --gpu --gid {} --no-display --lr 1e-2 --lam 0.0 "
+        default = " --dataset {} --bidirected --gpu --gid {} --no-display --lr 1e-2 --lam 1.0 "
     # cmds.append(default + " -pc -nc --no-ce --margin 0.1")
     # cmds.append(default + " -pc -nc --no-ce --margin 0.2")
     # cmds.append(default + " -pc -nc --no-ce --margin 0.4")
     # cmds.append(default + " --agg-type mean")
     cmds.append(default + " --agg-type pool")
+    cmds.append(default + " --agg-type gcn")
     # cmds.append(default + "-te concat")
     # cmds.append(default + " -pc -nc --margin 0.1")
     # cmds.append(default + " -pc -nc --margin 0.2")
@@ -74,9 +75,9 @@ def evaluate_lg(pdir="/nfs/zty/Graph/Dynamic-Graph"):
     else:
         default = "python -m torch_model.train_lg -d {} --no-display "
     cmds = []
-    cmds.append(default + " --model TGAT -f")
-    cmds.append(default + " --model SamplingFusion")
-    cmds.append(default + " --model LG")
+    cmds.append(default + " --model TGAT")
+    # cmds.append(default + " --model SamplingFusion")
+    # cmds.append(default + " --model LG")
     for data in fname:
         for cmd in cmds:
             os.system(cmd.format(data))

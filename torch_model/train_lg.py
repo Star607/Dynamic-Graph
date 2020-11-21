@@ -71,7 +71,7 @@ def config_parser():
                         help='dropout probability')
     parser.add_argument('--gpu',
                         type=int,
-                        default=1,
+                        default=3,
                         help='idx for the gpu to use')
     parser.add_argument('--node_dim',
                         type=int,
@@ -118,7 +118,12 @@ if True:
     NUM_EPOCH = args.n_epoch
     NUM_HEADS = args.n_head
     DROP_OUT = args.drop_out
-    GPU = get_free_gpu()
+    # GPU = get_free_gpu()
+    # GPU = str(args.gpu)
+    if args.gpu >= 0:
+        GPU = str(args.gpu)
+    else:
+        GPU = get_free_gpu()
     UNIFORM = args.uniform
     USE_TIME = args.time
     AGG_METHOD = args.agg_method

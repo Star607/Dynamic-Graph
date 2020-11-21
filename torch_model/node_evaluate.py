@@ -12,7 +12,7 @@ logger = set_logger(log_file=True)
 parser = argparse.ArgumentParser(description='GTC model evaluation.')
 parser.add_argument("--times", type=int, default=1)
 parser.add_argument("-d", "--dataset", type=str, default="JODIE-wikipedia",
-                    choices=["JODIE-wikipedia", "JODIE-reddit"])
+                    choices=["JODIE-wikipedia", "JODIE-mooc", "JODIE-reddit"])
 parser.add_argument("--gid", type=int, default=0)
 parser.add_argument("--display", dest="display", action="store_true")
 
