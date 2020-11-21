@@ -472,7 +472,7 @@ def parse_args():
                         help="number of training epochs")
     parser.add_argument("--time-encoding", "-te", type=str, default="cosine",
                         help="Time encoding function.", choices=["concat", "cosine", "outer"])
-    parser.add_argument("-bs", "--batch-size", type=int, default=1024)
+    parser.add_argument("-bs", "--batch-size", type=int, default=256)
     parser.add_argument("--n-hidden", type=int, default=128,
                         help="number of hidden gcn units")
     parser.add_argument("--n-layers", type=int, default=2,

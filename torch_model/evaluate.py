@@ -41,9 +41,9 @@ def evaluate_tgcl():
     fname = fname[args.start: args.end]
     cmds = []
     if args.display:
-        default = " --dataset {} --bidirected --gpu --gid {} --display --lr 1e-2 --lam 1.0  "
+        default = " --dataset {} --gpu --gid {} --display --lr 1e-2 --lam 1.0  "
     else:
-        default = " --dataset {} --bidirected --gpu --gid {} --no-display --lr 1e-2 --lam 1.0 "
+        default = " --dataset {} --gpu --gid {} --no-display --lr 1e-2 --lam 1.0 "
     # cmds.append(default + " -pc -nc --no-ce --margin 0.1")
     # cmds.append(default + " -pc -nc --no-ce --margin 0.2")
     # cmds.append(default + " -pc -nc --no-ce --margin 0.4")
@@ -62,6 +62,10 @@ def evaluate_tgcl():
     # cmds.append(default + "-pc -nc -te outer")
     for data in fname:
         for cmd in cmds:
+            if data.startswith("JODIE"):
+                cmd += " --directed"
+            else:
+                cmd += " --bidirected"
             margs = parse_args().parse_args(cmd.format(data, args.gid).split())
             main(margs, logger)
 
