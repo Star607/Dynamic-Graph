@@ -240,7 +240,8 @@ def prepare_dataset(dataset):
     edges, train_labels, val_labels, test_labels = [
         _f(e) for e in [edges, train_labels, val_labels, test_labels]]
     tmax, tmin = edges["timestamp"].max(), edges["timestamp"].min()
-    def scaler(s): return (s - tmin) / (tmax - tmin)
+    # def scaler(s): return (s - tmin) / (tmax - tmin)
+    def scaler(s): return (s - tmin)
     edges["timestamp"] = scaler(edges["timestamp"])
     train_labels["timestamp"] = scaler(train_labels["timestamp"])
     val_labels["timestamp"] = scaler(val_labels["timestamp"])

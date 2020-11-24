@@ -86,7 +86,8 @@ class TemporalLinkLayer(nn.Module):
             x = torch.cat([embed_u, embed_v], dim=1)
         else:
             x = embed_u + embed_v
-        return self.fc(self.dropout(x))
+        logits = self.fc(self.dropout(x))
+        return logits.squeeze()
 
 
 class TemporalNodeLayer(nn.Module):

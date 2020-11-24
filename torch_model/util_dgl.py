@@ -6,6 +6,7 @@ import sys
 import time
 
 import dgl
+from numba import jit
 import numpy as np
 import pandas as pd
 import torch
@@ -54,6 +55,34 @@ def timeit(method):
         return result
     return timed
 
+@timeit
+# @jit
+def compute_degrees(new_node_ids: list, num):
+    degs = np.zeros(num)
+    for node_ids in new_node_ids:
+        for i, idx in enumerate(node_ids):
+            degs[idx] = i + 1
+    return degs
+
+@timeit
+# @jit
+def construct_adj(src, dst, t, num):
+    adj_eid_l = [[] for _ in range(num)]
+    adj_ngh_l = [[] for _ in range(num)]
+    adj_ts_l = [[] for _ in range(num)]
+    for i in range(len(src)):
+        adj_eid_l[src[i]].append(i)
+        adj_ngh_l[src[i]].append(dst[i])
+        adj_ts_l[src[i]].append(t[i])
+
+        adj_eid_l[dst[i]].append(i)
+        adj_ngh_l[dst[i]].append(src[i])
+        adj_ts_l[dst[i]].append(t[i])
+    
+    adj_eid_l = [np.array(e) for e in adj_eid_l]
+    adj_ngh_l = [np.array(e) for e in adj_ngh_l]
+    adj_ts_l = [np.array(e) for e in adj_ts_l]
+    return adj_eid_l, adj_ngh_l, adj_ts_l
 
 def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
     ''' Edges should be a pandas DataFrame, and its columns should be columns
@@ -99,7 +128,7 @@ def construct_dglgraph(edges, nodes, device, node_dim=128, bidirected=False):
     # `(v, u, t)`. We can access node temporal features `(u, t)` from both
     # tensors by `g.edata["src_feat{layer}"][eid1]` and
     # `g.edata["dst_feat{layer}"][eid2]`.
-    g = dgl.DGLGraph((src, dst))
+    g = dgl.graph((src, dst)).to(device)
     g.ndata["nfeat"] = nfeature  # .to(device)
     g.edata["timestamp"] = etime.to(nfeature)  # .to(device)
     g.edata["efeat"] = efeature.to(nfeature)  # .to(device)
