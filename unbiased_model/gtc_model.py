@@ -44,7 +44,7 @@ class NegativeSampler(object):
         return dst
 
 
-@timeit
+# @timeit
 # @jit
 def history_sampler(src_idx, cut_time, adj_ngh_l, adj_ts_l, k):
     out_ngh_ids = np.zeros_like(src_idx.repeat(k))
@@ -61,7 +61,7 @@ def history_sampler(src_idx, cut_time, adj_ngh_l, adj_ts_l, k):
     return out_ngh_ids, out_ngh_ts
 
 
-@timeit
+# @timeit
 # @jit
 def find_idx(src_idx, cut_time, new_nodes_l, adj_ts_l):
     out_node_ids = np.zeros_like(src_idx)
@@ -597,6 +597,11 @@ def main(args, logger):
     optimizer = torch.optim.Adam(model.parameters(),
                                  lr=args.lr,
                                  weight_decay=args.weight_decay)
+    # clip gradients by value: https://stackoverflow.com/questions/54716377/how-to-do-gradient-clipping-in-pytorch
+    for p in model.parameters():
+        p.register_hook(lambda grad: torch.clamp(
+            grad, -args.clip, args.clip))
+
     if nfeat.requires_grad:
         logger.info("Trainable node embeddings.")
     else:
@@ -615,8 +620,6 @@ def main(args, logger):
     margin = '%.1f' % (args.margin)
 
     for epoch in epoch_bar:
-        model.train()
-        optimizer.zero_grad()
         batch_samples = (src, dst, t)
         neg_dst = neg_sampler(len(src))
         if args.pos_contra or args.neg_contra:
@@ -628,18 +631,20 @@ def main(args, logger):
         # These features are not leaf-tensors.
         agg_graph.ndata["nfeat"] = nfeat[old_ids]
 
+        model.train()
+        optimizer.zero_grad()
         loss = model(agg_graph, prop_graph, new_node_ids, new_node_tss,
                      batch_samples, neg_dst, contra_samples)
         # loss = checkpoint(model, agg_graph, prop_graph, new_node_ids, new_node_tss,
                     #  batch_samples, neg_dst, contra_samples)
         loss.backward()
         optimizer.step()
-        print('One epoch {:.2f}s'.format(time.time() - start))
+        # print('One epoch {:.2f}s'.format(time.time() - start))
 
         acc, f1, auc = eval_linkpred(model, val_labels, agg_graph, prop_graph,
                                      new_node_ids, new_node_tss)
         epoch_bar.update()
-        # epoch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
+        epoch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
 
         def ckpt_path(epoch):
             return f'./ckpt/{args.dataset}-{args.agg_type}-{trainable}-{norm}-{pos}-{neg}-{lr}-{epoch}-{args.hostname}-{device.type}-{device.index}.pth'
@@ -680,7 +685,7 @@ def main(args, logger):
         "lambda": args.lam,
         "margin": args.margin
     }
-    write_result(val_auc, (acc, f1, auc), args.dataset, params)
+    write_result(val_auc, (acc, f1, auc), args.dataset, params, postfix="FullBatch")
     MODEL_SAVE_PATH = f'./saved_models/{args.dataset}-{args.agg_type}-{lr}-{lam}-{margin}.pth'
     model = model.cpu()
     torch.save(model.state_dict(), MODEL_SAVE_PATH)
