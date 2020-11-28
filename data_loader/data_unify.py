@@ -136,7 +136,7 @@ def config_parser():
                     help="Datset end index (exclusive).")
     parser.add_argument("--train-ratio", "-tr", type=float,
                         default=0.70, help="Train dataset ratio.")
-    parser.add_argument("--valid-ratio", "-vr", type=float, default=0.05,
+    parser.add_argument("--valid-ratio", "-vr", type=float, default=0.15,
                         help="Valid dataset ratio, and test ratio will be computed by (1-train_ratio-valid_ratio).")
     parser.add_argument("--label", dest="label", action="store_true", default=False,
                         help="Whether to generate negative samples for datasets. Each labeled dataset will have a suffix xxx_label.edges.")

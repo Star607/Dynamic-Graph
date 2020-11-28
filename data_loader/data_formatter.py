@@ -45,6 +45,7 @@ Aminer:
 """
 import argparse
 import os
+import numpy as np
 import pandas as pd
 
 
@@ -61,6 +62,8 @@ def to_csv(project='', data_dir='/nfs/zty/Graph/graph_data/'):
 
 
 def ctdne_transf(project_dir, store_dir, project):
+    config = pd.read_csv(f'{project_dir}/README.config')
+    bipartite = {row.dataset: row.bipartite for row in config.itertuples()}
     fname = [f for f in os.listdir(project_dir) if f.endswith('.edges')]
     files = [os.path.join(project_dir, f) for f in fname]
     header = ['from_node_id', 'to_node_id', 'timestamp']
@@ -69,6 +72,9 @@ def ctdne_transf(project_dir, store_dir, project):
         if name.find('.') != -1:
             name = name[:name.find('.')]
         print('*****{}*****'.format(name))
+        if name not in bipartite:
+            raise NotImplementedError(name)
+
         df = pd.read_csv(f, header=None)
         if len(df.columns) < 3:
             # Read non-standard csv files separated by space.
@@ -81,11 +87,21 @@ def ctdne_transf(project_dir, store_dir, project):
         edges = pd.DataFrame(columns=edges_cols)
         edges[header] = df[header]
         edges['state_label'] = 0
-        edges.to_csv('{}/{}.edges'.format(store_dir, name), index=None)
 
         from_nodes = df['from_node_id'].tolist()
         to_nodes = df['to_node_id'].tolist()
+        if bipartite[name]:
+            max_from = np.max(from_nodes) + 1
+            min_to = np.min(to_nodes)
+            to_nodes = np.array(to_nodes) - min_to + max_from
+            to_nodes = list(to_nodes)
+
+        edges['to_node_id'] = to_nodes
+        edges.to_csv('{}/{}.edges'.format(store_dir, name), index=None)
+
         nodes_id = sorted(set(from_nodes + to_nodes))
+        
+
         nodes = pd.DataFrame(columns=nodes_cols)
         nodes['node_id'] = nodes_id
         nodes['id_map'] = list(range(len(nodes_id)))
