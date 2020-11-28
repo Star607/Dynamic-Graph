@@ -91,7 +91,7 @@ class NegativeSampler(object):
         # dst = self.weights.multinomial(self.k * n, replacement=True)
         dst = torch.randint(self.n_nodes, (self.k * n,))
         dst = self.dst_nodes[dst]
-        src = src.repeat_interleave(self.k * n)
+        src = src.repeat_interleave(self.k)
         return src, dst
 
 
@@ -305,8 +305,8 @@ def write_result(val_auc, metrics, dataset, params, postfix="GTC", results="resu
         f.close()
         os.chmod(res_path, 0o777)
     with open(res_path, 'a') as f:
-        result_str = "GTC,{},{:.4f},{:.4f},{:.4f},{:.4f}".format(
-            dataset, val_auc, acc, f1, auc)
+        result_str = "{},{},{:.4f},{:.4f},{:.4f},{:.4f}".format(
+            postfix, dataset, val_auc, acc, f1, auc)
         logging.info(result_str)
         params_str = ",".join(["{}={}".format(k, v)
                                for k, v in params.items()])
