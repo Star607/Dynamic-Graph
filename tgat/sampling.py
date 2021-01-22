@@ -68,7 +68,7 @@ def get_temporal_neighbor_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l,
         neighbors_e_idx = edge_idx_l[off_set_l[src_idx]:off_set_l[src_idx + 1]]
         left = np.searchsorted(neighbors_ts, cut_time, side="left")
         ngh_idx, ngh_eidx, ngh_ts = neighbors_idx[:left], \
-                neighbors_e_idx[:left], neighbors_ts[:left]
+                                    neighbors_e_idx[:left], neighbors_ts[:left]
 
         # ngh_idx, ngh_eidx, ngh_ts = find_before_nb(src_idx, cut_time,
         #                                            node_idx_l, node_ts_l,
@@ -120,6 +120,7 @@ def get_temporal_neighbor_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l,
     return out_ngh_node_batch, out_ngh_eidx_batch, out_ngh_t_batch
 
 
+# ！
 class NeighborFinder:
     def __init__(self, adj_list, uniform=False):
         """
@@ -247,15 +248,24 @@ def bisampling_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l, edge_idx_l,
         neighbors_e_idx = edge_idx_l[off_set_l[src_idx]:off_set_l[src_idx + 1]]
         left = np.searchsorted(neighbors_ts, cut_time, side="left")
         ngh_idx, ngh_eidx, ngh_ts = neighbors_idx[:left], \
-                neighbors_e_idx[:left], neighbors_ts[:left]
+                                    neighbors_e_idx[:left], neighbors_ts[:left]
 
         if len(ngh_idx) <= 0:
             continue
 
         half_neighbors = num_neighbors // 2
         # uniform sampling
-        sampled_idx = np.random.randint(0, len(ngh_idx), half_neighbors)
+        # sampled_idx = np.random.randint(0, len(ngh_idx), half_neighbors)
+        # sampled_idx = np.sort(sampled_idx)
+        # print(i,':',sampled_idx)
+
+        # exp sampling
+        x = np.exp(-(cut_time - ngh_ts)) + 1
+        probabilities = x / np.sum(x)
+        elements = np.array(range(0, len(ngh_idx)))  # !
+        sampled_idx = np.random.choice(elements, half_neighbors, replace=True, p=probabilities)
         sampled_idx = np.sort(sampled_idx)
+        # print(i, ':', sampled_idx)
 
         out_ngh_node_batch[i, :half_neighbors] = ngh_idx[sampled_idx]
         out_ngh_t_batch[i, :half_neighbors] = ngh_ts[sampled_idx]
@@ -275,6 +285,7 @@ def bisampling_nb(src_idx_l, cut_time_l, node_idx_l, node_ts_l, edge_idx_l,
     return out_ngh_node_batch, out_ngh_eidx_batch, out_ngh_t_batch
 
 
+# ！
 class BiSamplingNFinder(NeighborFinder):
     def __init__(self, adj_list) -> None:
         # binary sampling: first half consists of uniform sampling, and the
@@ -292,10 +303,11 @@ class BiSamplingNFinder(NeighborFinder):
                              self.off_set_l,
                              num_neighbors=num_neighbors)
 
+
 # @jit
 def global_anchors(edges, n_anchors=20, metric="pagerank"):
     mg = nx.MultiGraph()
-    mg.add_edges_from(edges, weight=1.0) 
+    mg.add_edges_from(edges, weight=1.0)
     if metric == "pagerank":
         scores = nx.pagerank_scipy(mg)
     elif metric == "degree":
@@ -352,6 +364,7 @@ class Wrapper(object):
 class NeighborStream(threading.Thread):
     """Transform the numpy arrays to pytorch tensors on the specified device.
     """
+
     def __init__(self, queues, device, batch_num, maxsize=20) -> None:
         super(NeighborStream, self).__init__()
         self.cpu_queues = queues
@@ -389,6 +402,7 @@ class NeighborStream(threading.Thread):
 class NeighborLoader(object):
     """Given the ngh_finder and source nodes, `NeighborLoader` provides batch-wise `k`-hop neighbors of a batch of source nodes.
     """
+
     def __init__(self,
                  ngh_finder,
                  num_layer,
@@ -414,7 +428,7 @@ class NeighborLoader(object):
         self.ques = []
         self.gpu_stream = gpu_stream
         self.anchors = None
-    
+
     def set_anchors(self, anchors):
         self.anchors = anchors
 
@@ -445,7 +459,6 @@ class NeighborLoader(object):
             s = NeighborProcess(anchor_generator, ts_generator, self.ngh_finder,
                                 self.num_layer - 1, cpu_ques[-1])
             s.start()
-
 
         if self.gpu_stream:
             stream = NeighborStream(cpu_ques,

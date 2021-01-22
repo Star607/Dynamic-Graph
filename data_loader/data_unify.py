@@ -4,14 +4,14 @@ import os
 import time
 from collections import defaultdict
 from datetime import datetime
-
+# Distributed Graphics Library——分布图形库(硅图形)
 import dgl
 import numpy as np
 import pandas as pd
 
 from data_loader.data_util import _iterate_datasets, _load_data
 
-
+#add节点度的分布  e是否均匀随t+
 def data_stats(project_dir="/nfs/zty/Graph/format_data/"):
     # nodes, edges, d_avg, d_max, timespan(days)
     fname = [f for f in os.listdir(project_dir) if f.endswith("edges")]
@@ -22,20 +22,20 @@ def data_stats(project_dir="/nfs/zty/Graph/format_data/"):
         print("*****{}*****".format(name))
         edges = pd.read_csv(path)
         nodes = pd.read_csv(os.path.join(project_dir, f"{name}.nodes"))
-        enodes = list(set(edges["from_node_id"]).union(edges["to_node_id"]))
+        enodes = list(set(edges["from_node_id"]).union(edges["to_node_id"])) #取并集
         assert len(nodes) == len(enodes), "The number of nodes is not the same as that of edges."
         noint = sum([not isinstance(nid, int) for nid in enodes])
         print("{} node ids are not integer.".format(noint))
 
-        id2idx = {row.node_id: row.id_map for row in nodes.itertuples()}
-        edges["from_node_id"] = edges["from_node_id"].map(id2idx)
+        id2idx = {row.node_id: row.id_map for row in nodes.itertuples()} #花括号内是键值对，表示字典
+        edges["from_node_id"] = edges["from_node_id"].map(id2idx)        #?
         edges["to_node_id"] = edges["to_node_id"].map(id2idx)
         g = dgl.DGLGraph((edges["from_node_id"], edges["to_node_id"]))
         g.add_edges(edges["to_node_id"], edges["from_node_id"])
         degrees = g.in_degrees()
         begin = datetime.fromtimestamp(edges["timestamp"].min())
         end = datetime.fromtimestamp(edges["timestamp"].max())
-        delta = (end - begin).total_seconds() / 86400
+        delta = (end - begin).total_seconds() / 86400                   #24h
         print("density:{:.4f}, nodes:{} edges:{} d_max:{} d_avg:{:.2f} timestamps:{:.2f}".format(
             len(edges) * 2.0 / (len(nodes) * len(nodes) - 1), len(nodes), len(edges), max(degrees), len(edges)/len(nodes), delta))
 
@@ -52,8 +52,8 @@ def train_test_split(args, root_dir="/nfs/zty/Graph"):
         print("*****{}*****".format(name))
         start = time.time()
         edges = edges.sort_values(by="timestamp").reset_index(drop=True)
-        ts = sorted(edges["timestamp"].unique())
-        train_ts = ts[int(args.train_ratio * len(ts))]
+        ts = sorted(edges["timestamp"].unique())  # 一维数组
+        train_ts = ts[int(args.train_ratio * len(ts))]  #train数据集占的ts
         val_ts = ts[int((args.train_ratio + args.valid_ratio) * len(ts))]
         print("Timestamp {} slots, train timestamp cut at {} slot.".format(
             len(ts), int(args.train_ratio * len(ts))))
@@ -64,7 +64,7 @@ def train_test_split(args, root_dir="/nfs/zty/Graph"):
         train_nodes = set(train_edges["from_node_id"]).union(set(train_edges["to_node_id"]))
         print("Total {} nodes, Train/Unseen {}/{} nodes.".format(len(nodes),
                                                                  len(train_nodes), len(nodes)-len(train_nodes)))
-        val_edges = val_edges[val_edges["from_node_id"].isin(train_nodes)]
+        val_edges = val_edges[val_edges["from_node_id"].isin(train_nodes)]  # 去掉在验证集和测试集，但训练集unseen的点
         val_edges = val_edges[val_edges["to_node_id"].isin(train_nodes)]
         test_edges = test_edges[test_edges["from_node_id"].isin(train_nodes)]
         test_edges = test_edges[test_edges["to_node_id"].isin(train_nodes)]
@@ -144,6 +144,7 @@ def config_parser():
 
 
 if __name__ == "__main__":
+    print("start")
     import sys
     args = config_parser()
     logger = logging.getLogger()
@@ -160,3 +161,4 @@ if __name__ == "__main__":
     # to_dataframe()
     # train_test2idx()
     # train_test_split()
+    print("end")

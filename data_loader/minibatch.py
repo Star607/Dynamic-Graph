@@ -126,7 +126,7 @@ class TemporalEdgeBatchIterator(object):
             a truncated adjacency list containing neighbor ids
             a truncated adjacency list containing edge timestamps
         """
-        adj_ids_list = [[] for _ in range(len(self.id2idx))]
+        adj_ids_list = [[] for _ in range(len(self.id2idx))] #[[],[],......[]]
         adj_tss_list = [[] for _ in range(len(self.id2idx))]
         # print(len(self.id2idx), len(self.id2idx))
         # Attention! df.iterrows will change dtype for each column!

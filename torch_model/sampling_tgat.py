@@ -47,7 +47,7 @@ class SamplingFusion(TGAN):
         score = self.affinity_score(src_embed, target_embed).squeeze(dim=-1)
         return score
 
-    def contrast(self, src_idx_l, target_idx_l, background_idx_l,
+    def  contrast(self, src_idx_l, target_idx_l, background_idx_l,
                  num_neighbors):
         src_embed = self.tem_conv(src_idx_l, self.num_layers, num_neighbors)
         target_embed = self.tem_conv(target_idx_l, self.num_layers,

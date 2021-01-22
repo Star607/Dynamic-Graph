@@ -14,7 +14,7 @@ from tqdm import trange
 import torch
 import pandas as pd
 import numpy as np
-#import numba
+# import numba
 
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import average_precision_score
@@ -23,12 +23,14 @@ from sklearn.metrics import roc_auc_score
 
 from data_loader.data_util import load_graph, load_label_data
 from torch_model.sampling_tgat import TGAN, SamplingFusion, LGFusion
-from tgat.sampling import NeighborFinder, BiSamplingNFinder, NeighborLoader, global_anchors
+from tgat.sampling import NeighborFinder, BiSamplingNFinder, global_anchors
 from model.utils import EarlyStopMonitor, RandEdgeSampler, get_free_gpu
 
 
+# ImportError: cannot import name 'NeighborLoader' from 'tgat.sampling' (/home/wy/MyCode/Dynamic-Graph/tgat/sampling.py)
+
 def config_parser():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()  # add内的参数：一个命名或者一个选项字符串的列表，dest——被添加到 parse_args() 所返回对象上的属性名
     parser.add_argument('-d',
                         '--data',
                         type=str,
@@ -38,8 +40,8 @@ def config_parser():
     parser.add_argument("--no-display", dest="display", action="store_false")
     parser.add_argument('-f', '--freeze', action='store_true')
     parser.add_argument('--model',
-                        default='SamplingFusion',
-                        choices=['TGAT', 'SamplingFusion', 'LG'])
+                        default='TGAT',
+                        choices=['TGAT', 'SamplingFusion', 'LG'])  # rewirte
     parser.add_argument('--bs', type=int, default=200, help='batch_size')
     parser.add_argument('--prefix',
                         type=str,
@@ -71,7 +73,7 @@ def config_parser():
                         help='dropout probability')
     parser.add_argument('--gpu',
                         type=int,
-                        default=3,
+                        default=-1,
                         help='idx for the gpu to use')
     parser.add_argument('--node_dim',
                         type=int,
@@ -123,7 +125,7 @@ if True:
     if args.gpu >= 0:
         GPU = str(args.gpu)
     else:
-        GPU = get_free_gpu()
+        GPU = get_free_gpu()  #
     UNIFORM = args.uniform
     USE_TIME = args.time
     AGG_METHOD = args.agg_method
@@ -136,6 +138,7 @@ if True:
     TIME_DIM = args.time_dim
 
     MODEL_SAVE_PATH = f'./saved_models/{args.model}-{args.agg_method}-{args.attn_mode}-{args.data}.pth'
+
 
     def get_checkpoint_path(epoch):
         return f'./ckpt/{args.model}-{args.agg_method}-{args.attn_mode}-{args.data}-{epoch}.pth'
@@ -167,27 +170,57 @@ def set_logger():
 logger = set_logger()
 logger.info(args)
 
-def eval_one_epoch(hint, model, data_loader, label):
-    data_loader.reset()
+
+# def eval_one_epoch(hint, model, data_loader, label):
+#     data_loader.reset()
+#     with torch.no_grad():
+#         model = model.eval()
+#         TEST_BATCH_SIZE = args.bs
+#         scores = []
+#         while not data_loader.end():
+#             src_list, dst_list = data_loader.next_batch()  # tgat/sampling.py
+#             # if args.model == "LG":
+#             #     model.set_anchors(data_loader.batch_anchor)
+#             prob_score = model(src_list, dst_list).sigmoid()
+#             scores.extend(list(prob_score.cpu().numpy()))
+#         pred_label = np.array(scores) > 0.5
+#         pred_prob = np.array(scores)
+#     return accuracy_score(label, pred_label), \
+#            average_precision_score(label, pred_label), \
+#            f1_score(label, pred_label), roc_auc_score(label, pred_prob)  # more detail
+
+def eval_one_epoch(hint, model, sampler, src, dst, ts, label):
+    val_acc, val_ap, val_f1, val_auc = [], [], [], []
     with torch.no_grad():
         model = model.eval()
         TEST_BATCH_SIZE = args.bs
-        scores = []
-        while not data_loader.end():
-            src_list, dst_list = data_loader.next_batch()
-            if args.model == "LG":
-                model.set_anchors(data_loader.batch_anchor)
-            prob_score = model(src_list, dst_list).sigmoid()
-            scores.extend(list(prob_score.cpu().numpy()))
-        pred_label = np.array(scores) > 0.5
-        pred_prob = np.array(scores)
-    return accuracy_score(label, pred_label), \
-            average_precision_score(label, pred_label), \
-            f1_score(label, pred_label), roc_auc_score(label, pred_prob)
+        num_test_instance = len(src)
+        num_test_batch = math.ceil(num_test_instance / TEST_BATCH_SIZE)
+        for k in range(num_test_batch):
+            s_idx = k * TEST_BATCH_SIZE
+            e_idx = min(num_test_instance - 1, s_idx + TEST_BATCH_SIZE)
+            src_l_cut = src[s_idx:e_idx]
+            dst_l_cut = dst[s_idx:e_idx]
+            ts_l_cut = ts[s_idx:e_idx]
+            # label_l_cut = label[s_idx:e_idx]
+
+            size = len(src_l_cut)
+            src_l_fake, dst_l_fake = sampler.sample(size)
+
+            pos_prob, neg_prob = model.contrast(src_l_cut, dst_l_cut, dst_l_fake, ts_l_cut, NUM_NEIGHBORS)
+            pred_score = np.concatenate([(pos_prob).cpu().numpy(), (neg_prob).cpu().numpy()])
+            pred_label = pred_score > 0.5
+            true_label = np.concatenate([np.ones(size), np.zeros(size)])
+
+            val_acc.append((pred_label == true_label).mean())
+            val_ap.append(average_precision_score(true_label, pred_score))
+            val_f1.append(f1_score(true_label, pred_label))
+            val_auc.append(roc_auc_score(true_label, pred_score))
+        return np.mean(val_acc), np.mean(val_ap), np.mean(val_f1), np.mean(val_auc)
 
 
 if True:
-    edges, n_nodes, val_time, test_time = load_graph(dataset=args.data)
+    edges, n_nodes, val_time, test_time = load_graph(dataset=args.data)  # load_graph? shape?
     g_df = edges[["from_node_id", "to_node_id", "timestamp"]].copy()
     g_df["idx"] = np.arange(1, len(g_df) + 1)
     g_df.columns = ["u", "i", "ts", "idx"]
@@ -199,7 +232,7 @@ if True:
     else:
         e_feat = np.zeros((len(g_df) + 1, NODE_DIM))
 
-    if args.freeze:
+    if args.freeze:  # 是否为每个节点训练节点向量
         # e_feat = edges.iloc[:, 4:].to_numpy()
         # NODE_DIM = e_feat.shape[1]
         n_feat = np.zeros((n_nodes + 1, NODE_DIM))
@@ -242,11 +275,20 @@ def set_random_seed():
     seed = 42
     random.seed(seed)
     np.random.seed(seed)
-    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.deterministic = True  # 将这个 flag 置为True的话，每次返回的卷积算法将是确定的
     torch.backends.cudnn.benchmark = False
 
 
+'''
+总的来说，大部分情况下，设置这个 flag 可以让内置的 cuDNN 的 auto-tuner 自动寻找最适合当前配置的高效算法，来达到优化运行效率的问题。
+一般来讲，应该遵循以下准则：
+如果网络的输入数据维度或类型上变化不大，设置  torch.backends.cudnn.benchmark = true  可以增加运行效率；
+如果网络的输入数据在每次 iteration 都变化的话，会导致 cnDNN 每次都会去寻找一遍最优配置，这样反而会降低运行效率。
+'''
+
 set_random_seed()
+
+
 # Initialize the data structure for graph and edge sampling
 # build the graph for fast query
 # @jit
@@ -256,6 +298,8 @@ def build_graph(src_l, dst_l, e_idx_l, ts_l):
         adj_list[src].append((dst, eidx, ts))
         adj_list[dst].append((src, eidx, ts))
     return adj_list
+
+
 adj_list = build_graph(train_src_l, train_dst_l, train_e_idx_l, train_ts_l)
 full_adj_list = build_graph(src_l, dst_l, e_idx_l, ts_l)
 
@@ -269,13 +313,14 @@ else:
     raise NotImplementedError(args.sampling)
 
 train_rand_sampler = RandEdgeSampler(train_src_l, train_dst_l)
-
+val_rand_sampler = RandEdgeSampler(src_l, dst_l)
+test_rand_sampler = RandEdgeSampler(src_l, dst_l)
 # Model initialize
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"  # “PCI_BUS_ID” # 按照PCI_BUS_ID顺序从0开始排列GPU设备
 device = torch.device('cuda:{}'.format(GPU))
 if args.model == "SamplingFusion":
     Model = SamplingFusion
-elif args.model == "LG":
+elif args.model == "LG":  # lg?
     Model = LGFusion
 elif args.model == "TGAT":
     Model = TGAN
@@ -306,61 +351,59 @@ logger.info('num of batches per epoch: {}'.format(num_batch))
 idx_list = np.arange(num_instance)
 np.random.shuffle(idx_list)
 train_nodes = (train_src_l, train_dst_l, train_src_l)
-train_loader = NeighborLoader(train_ngh_finder,
-                              NUM_LAYER,
-                              train_nodes,
-                              train_ts_l,
-                              device,
-                              batch_size=BATCH_SIZE,
-                              shuffle=True)
-val_nodes = (val_src_l, val_dst_l)
-val_loader = NeighborLoader(full_ngh_finder,
-                            NUM_LAYER,
-                            val_nodes,
-                            val_ts_l,
-                            device,
-                            batch_size=BATCH_SIZE)
+# train_loader = NeighborLoader(train_ngh_finder,
+#                               NUM_LAYER,
+#                               train_nodes,
+#                               train_ts_l,
+#                               device,
+#                               batch_size=BATCH_SIZE,
+#                               shuffle=True)
+val_nodes = (val_src_l, val_dst_l)  # val?
+# val_loader = NeighborLoader(full_ngh_finder,
+#                             NUM_LAYER,
+#                             val_nodes,
+#                             val_ts_l,
+#                             device,
+#                             batch_size=BATCH_SIZE)
 test_nodes = (test_src_l, test_dst_l)
-test_loader = NeighborLoader(full_ngh_finder,
-                             NUM_LAYER,
-                             test_nodes,
-                             test_ts_l,
-                             device,
-                             batch_size=BATCH_SIZE)
+# test_loader = NeighborLoader(full_ngh_finder,
+#                              NUM_LAYER,
+#                              test_nodes,
+#                              test_ts_l,
+#                              device,
+#                              batch_size=BATCH_SIZE)
 
 # set anchors for both data_loaders and models
-if args.model == "LG":
-    edges = list(zip(train_src_l, train_dst_l))
-    anchors = global_anchors(edges, n_anchors=args.n_anchors, metric=args.metric)
-    for loader in [train_loader, val_loader, test_loader]:
-        loader.set_anchors(anchors)
+# if args.model == "LG":
+#     edges = list(zip(train_src_l, train_dst_l))
+#     anchors = global_anchors(edges, n_anchors=args.n_anchors, metric=args.metric)  # ?
+#     for loader in [train_loader, val_loader, test_loader]:
+#         loader.set_anchors(anchors)
 
 early_stopper = EarlyStopMonitor()
 epoch_bar = trange(NUM_EPOCH, disable=(not args.display))
 for epoch in epoch_bar:
-    # Training
-    # training use only training graph
+    model.ngh_finder = train_ngh_finder  #
     np.random.shuffle(idx_list)
     batch_bar = trange(num_batch, disable=(not args.display))
 
-    src_l_fake, dst_l_fake = train_rand_sampler.sample(len(train_src_l))
-    src_nodes = (train_src_l, train_dst_l, dst_l_fake)
-    train_loader.src_nodes = src_nodes
-    train_loader.reset()
     for k in batch_bar:
-        src_l_cut, dst_l_cut, dst_l_fake = train_loader.next_batch()
-        src_nodes, src_eids, src_time = src_l_cut
-        size = len(src_nodes[0])
+        s_idx = k * BATCH_SIZE
+        e_idx = min(num_instance - 1, s_idx + BATCH_SIZE)
+        src_l_cut, dst_l_cut = train_src_l[s_idx:e_idx], train_dst_l[s_idx:e_idx]
+        ts_l_cut = train_ts_l[s_idx:e_idx]
+        size = len(src_l_cut)
+        src_l_fake, dst_l_fake = train_rand_sampler.sample(size)
+
         with torch.no_grad():
             pos_label = torch.ones(size, dtype=torch.float, device=device)
             neg_label = torch.zeros(size, dtype=torch.float, device=device)
 
         optimizer.zero_grad()
         model = model.train()
-        if args.model == "LG":
-            model.set_anchors(train_loader.batch_anchor)
-        pos_prob, neg_prob = model.contrast(src_l_cut, dst_l_cut, dst_l_fake,
-                                            NUM_NEIGHBORS)
+        # if args.model == "LG":
+        #     model.set_anchors(train_loader.batch_anchor)
+        pos_prob, neg_prob = model.contrast(src_l_cut, dst_l_cut, dst_l_fake, ts_l_cut, NUM_NEIGHBORS)
         loss = criterion(pos_prob, pos_label)
         loss += criterion(neg_prob, neg_label)
 
@@ -379,9 +422,9 @@ for epoch in epoch_bar:
             auc = roc_auc_score(true_label, pred_score)
             batch_bar.set_postfix(loss=loss.item(), acc=acc, f1=f1, auc=auc)
     # validation phase use all information
-    val_acc, val_ap, val_f1, val_auc = eval_one_epoch('val for old nodes',
-                                                      model, val_loader,
-                                                      val_label_l)
+    model.ngh_finder = full_ngh_finder
+    val_acc, val_ap, val_f1, val_auc = eval_one_epoch('val for old nodes', model, val_rand_sampler,
+                                                      val_src_l, val_dst_l, val_ts_l, val_label_l)
     epoch_bar.update()
     epoch_bar.set_postfix(acc=val_acc, f1=val_f1, auc=val_auc)
 
@@ -399,11 +442,10 @@ logger.info(
     f'Loaded the best model at epoch {early_stopper.best_epoch} for inference')
 model.eval()
 # testing phase use all information
-_, _, _, val_auc = eval_one_epoch('val for old nodes', model, val_loader,
-                                  val_label_l)
-test_acc, test_ap, test_f1, test_auc = eval_one_epoch('test for old nodes',
-                                                      model, test_loader,
-                                                      test_label_l)
+_, _, _, val_auc = eval_one_epoch('val for old nodes', model,val_rand_sampler,
+                                  val_src_l, val_dst_l, val_ts_l, val_label_l)
+test_acc, test_ap, test_f1, test_auc = eval_one_epoch('test for old nodes', model, test_rand_sampler, test_src_l,
+                                                       test_dst_l, test_ts_l, test_label_l)
 
 logger.info('Test statistics: acc: {:.4f}, f1:{:.4f} auc: {:.4f}'.format(
     test_acc, test_f1, test_auc))
